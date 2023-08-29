@@ -526,8 +526,6 @@ int find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
                             fanout_tree);
 
   collect_used_nodes(fanout_tree, best_level, used_fanout_tree_nodes);
-  return best_level;
-
   auto find_fanout_existing_node_end_time = std::chrono::high_resolution_clock::now();
   auto elapsed_time = std::chrono::duration_cast<std::chrono::bgTimeUnit>(find_fanout_existing_node_end_time - find_fanout_existing_node_start_time).count();
   profileStats.find_best_fanout_existing_node_time += elapsed_time;
@@ -535,6 +533,8 @@ int find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
     std::max(profileStats.max_find_best_fanout_existing_node_time.load(), elapsed_time);
   profileStats.min_find_best_fanout_existing_node_time =
     std::min(profileStats.min_find_best_fanout_existing_node_time.load(), elapsed_time);
+    
+  return best_level;
 }
 
 }  // namespace fanout_tree
