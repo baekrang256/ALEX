@@ -1979,6 +1979,24 @@ public:
       leaf->unused.unlock();
       memory_fence();
       rcu_progress(worker_id);
+      auto insert_from_parent_end_time = std::chrono::high_resolution_clock::now();
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_from_parent_end_time - insert_from_parent_start_time).count();
+      if (last_parent == superroot_) {
+        profileStats.insert_from_superroot_fail_time[worker_id] += elapsed_time;
+        profileStats.insert_superroot_fail_cnt[worker_id]++;
+        profileStats.max_insert_from_superroot_fail_time[worker_id] =
+          std::max(profileStats.max_insert_from_superroot_fail_time[worker_id], elapsed_time);
+        profileStats.min_insert_from_superroot_fail_time[worker_id] =
+          std::min(profileStats.min_insert_from_superroot_fail_time[worker_id], elapsed_time);
+      }
+      else {
+        profileStats.insert_from_parent_fail_time[worker_id] += elapsed_time;
+        profileStats.insert_directp_fail_cnt[worker_id]++;
+        profileStats.max_insert_from_parent_fail_time[worker_id] =
+          std::max(profileStats.max_insert_from_parent_fail_time[worker_id], elapsed_time);
+        profileStats.min_insert_from_parent_fail_time[worker_id] =
+          std::min(profileStats.min_insert_from_parent_fail_time[worker_id], elapsed_time);
+      }
       return {Iterator(nullptr, 1), false, parent};
     }
 
