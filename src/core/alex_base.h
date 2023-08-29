@@ -680,6 +680,562 @@ inline bool cpu_supports_bmi() {
   return static_cast<bool>(CPUID(7, 0).EBX() & (1 << 3));
 }
 
+#define fgStatType int64_t
+#define bgStatType int64_t
+#define lkStatType int64_t
+
+#define fgTimeUnit nanoseconds
+#define bgTimeUnit nanoseconds
+#define lkTimeUnit nanoseconds
+
+struct ProfileStats {
+  uint32_t td_num; //number of threads
+
+  //time related
+  //for foreground threads
+  fgStatType *get_payload_time, *max_get_payload_time, *min_get_payload_time;
+  fgStatType *insert_from_superroot_success_time,
+             *max_insert_from_superroot_success_time,
+             *min_insert_from_superroot_success_time;
+  fgStatType *insert_from_parent_success_time,
+             *max_insert_from_parent_success_time,
+             *min_insert_from_parent_success_time;
+  fgStatType *insert_from_superroot_fail_time,
+             *max_insert_from_superroot_fail_time,
+             *min_insert_from_superroot_fail_time;
+  fgStatType *insert_from_parent_fail_time,
+             *max_insert_from_parent_fail_time,
+             *min_insert_from_parent_fail_time;
+  fgStatType *get_leaf_from_get_payload_time,
+             *max_get_leaf_from_get_payload_time,
+             *min_get_leaf_from_get_payload_time;
+  fgStatType *get_leaf_from_insert_superroot_time,
+             *max_get_leaf_from_insert_superroot_time,
+             *min_get_leaf_from_insert_superroot_time;
+  fgStatType *get_leaf_from_insert_directp_time,
+             *max_get_leaf_from_insert_directp_time,
+             *min_get_leaf_from_insert_directp_time;
+  fgStatType *find_key_time,
+             *max_find_key_time,
+             *min_find_key_time;
+  fgStatType *insert_using_shifts_time,
+             *max_insert_using_shifts_time,
+             *min_insert_using_shifts_time;
+  fgStatType *insert_element_at_time,
+             *max_insert_element_at_time,
+             *min_insert_element_at_time;
+  
+
+  //fore background threads
+  std::atomic<bgStatType> resize_time, max_resize_time, min_resize_time;
+  std::atomic<bgStatType> find_best_fanout_existing_node_time,
+                          max_find_best_fanout_existing_node_time,
+                          min_find_best_fanout_existing_node_time;
+  std::atomic<bgStatType> split_downwards_time,
+                          max_split_downwards_time,
+                          min_split_downwards_time;
+  std::atomic<bgStatType> split_sideways_time,
+                          max_split_sideways_time,
+                          min_split_sideways_time;
+
+  //for both fore/background threads
+  std::atomic<lkStatType> lock_achieve_time,
+                       max_lock_achieve_time,
+                       min_lock_achieve_time;
+
+  //count related
+  //for foreground threads
+  uint64_t *get_payload_call_cnt;
+  uint64_t *insert_superroot_call_cnt;
+  uint64_t *insert_directp_call_cnt;
+  uint64_t *insert_superroot_success_cnt;
+  uint64_t *insert_directp_success_cnt;
+  uint64_t *insert_superroot_fail_cnt;
+  uint64_t *insert_directp_fail_cnt;
+  uint64_t *get_leaf_from_get_payload_call_cnt;
+  uint64_t *get_leaf_from_insert_superroot_call_cnt;
+  uint64_t *get_leaf_from_insert_directp_call_cnt;
+  uint64_t *insert_using_shifts_call_cnt;
+  uint64_t *insert_element_at_call_cnt;
+
+  //for background threads
+  std::atomic<uint64_t> resize_call_cnt;
+  std::atomic<uint64_t> find_best_fanout_existing_node_call_cnt;
+  std::atomic<uint64_t> split_downwards_call_cnt;
+  std::atomic<uint64_t> split_sideways_call_cnt;
+  //AtomicVal<uint64_t> create_two_new_data_nodes_call_cnt;
+  //AtomicVal<uint64_t> create_new_data_nodes_call_cnt;
+
+  //for both fore/background threads
+  std::atomic<uint64_t> lock_achieve_cnt;
+
+  //initializing profile structures
+  void profileInit (uint32_t thread_num) {
+    td_num = thread_num;
+    get_payload_time = new fgStatType[thread_num];
+    max_get_payload_time = new fgStatType[thread_num];
+    min_get_payload_time = new fgStatType[thread_num];
+    insert_from_superroot_success_time = new fgStatType[thread_num];
+    max_insert_from_superroot_success_time = new fgStatType[thread_num];
+    min_insert_from_superroot_success_time = new fgStatType[thread_num];
+    insert_from_parent_success_time = new fgStatType[thread_num];
+    max_insert_from_parent_success_time = new fgStatType[thread_num];
+    min_insert_from_parent_success_time = new fgStatType[thread_num];
+    insert_from_superroot_fail_time = new fgStatType[thread_num];
+    max_insert_from_superroot_fail_time = new fgStatType[thread_num];
+    min_insert_from_superroot_fail_time = new fgStatType[thread_num];
+    insert_from_parent_fail_time = new fgStatType[thread_num];
+    max_insert_from_parent_fail_time = new fgStatType[thread_num];
+    min_insert_from_parent_fail_time = new fgStatType[thread_num];
+    get_leaf_from_get_payload_time = new fgStatType[thread_num];
+    max_get_leaf_from_get_payload_time = new fgStatType[thread_num];
+    min_get_leaf_from_get_payload_time = new fgStatType[thread_num];
+    get_leaf_from_insert_superroot_time = new fgStatType[thread_num];
+    max_get_leaf_from_insert_superroot_time = new fgStatType[thread_num];
+    min_get_leaf_from_insert_superroot_time = new fgStatType[thread_num];
+    get_leaf_from_insert_directp_time = new fgStatType[thread_num];
+    max_get_leaf_from_insert_directp_time = new fgStatType[thread_num];
+    min_get_leaf_from_insert_directp_time = new fgStatType[thread_num];
+    find_key_time = new fgStatType[thread_num];
+    max_find_key_time = new fgStatType[thread_num];
+    min_find_key_time = new fgStatType[thread_num];
+    insert_using_shifts_time = new fgStatType[thread_num];
+    max_insert_using_shifts_time = new fgStatType[thread_num];
+    min_insert_using_shifts_time = new fgStatType[thread_num];
+    insert_element_at_time = new fgStatType[thread_num];
+    max_insert_element_at_time = new fgStatType[thread_num];
+    min_insert_element_at_time = new fgStatType[thread_num];
+    get_payload_call_cnt = new uint64_t[thread_num];
+    insert_superroot_call_cnt = new uint64_t[thread_num];
+    insert_directp_call_cnt = new uint64_t[thread_num];
+    insert_superroot_success_cnt = new uint64_t[thread_num];
+    insert_directp_success_cnt = new uint64_t[thread_num];
+    insert_superroot_fail_cnt = new uint64_t[thread_num];
+    insert_directp_fail_cnt = new uint64_t[thread_num];
+    get_leaf_from_get_payload_call_cnt = new uint64_t[thread_num];
+    get_leaf_from_insert_superroot_call_cnt = new uint64_t[thread_num];
+    get_leaf_from_insert_directp_call_cnt = new uint64_t[thread_num];
+    insert_using_shifts_call_cnt = new uint64_t[thread_num];
+    insert_element_at_call_cnt = new uint64_t[thread_num];
+  }
+
+  void profileReInit () {
+    for (uint32_t i = 0; i < td_num; ++i) {
+      get_payload_time[i] = 0;
+      max_get_payload_time[i] = std::numeric_limits<fgStatType>::min();
+      min_get_payload_time[i] = std::numeric_limits<fgStatType>::max();
+
+      insert_from_superroot_success_time[i] = 0;
+      max_insert_from_superroot_success_time[i] = std::numeric_limits<fgStatType>::min();
+      min_insert_from_superroot_success_time[i] = std::numeric_limits<fgStatType>::max();
+
+      insert_from_parent_success_time[i] = 0;
+      max_insert_from_parent_success_time[i] = std::numeric_limits<fgStatType>::min();
+      min_insert_from_parent_success_time[i] = std::numeric_limits<fgStatType>::max();
+
+      insert_from_superroot_fail_time[i] = 0;
+      max_insert_from_superroot_fail_time[i] = std::numeric_limits<fgStatType>::min();
+      min_insert_from_superroot_fail_time[i] = std::numeric_limits<fgStatType>::max();
+
+      insert_from_parent_fail_time[i] = 0;
+      max_insert_from_parent_fail_time[i] = std::numeric_limits<fgStatType>::min();
+      min_insert_from_parent_fail_time[i] = std::numeric_limits<fgStatType>::max();
+
+      get_leaf_from_get_payload_time[i] = 0;
+      max_get_leaf_from_get_payload_time[i] = std::numeric_limits<fgStatType>::min();
+      min_get_leaf_from_get_payload_time[i] = std::numeric_limits<fgStatType>::max();
+
+      get_leaf_from_insert_superroot_time[i] = 0;
+      max_get_leaf_from_insert_superroot_time[i] = std::numeric_limits<fgStatType>::min();
+      min_get_leaf_from_insert_superroot_time[i] = std::numeric_limits<fgStatType>::max();
+
+      get_leaf_from_insert_directp_time[i] = 0;
+      max_get_leaf_from_insert_directp_time[i] = std::numeric_limits<fgStatType>::min();
+      min_get_leaf_from_insert_directp_time[i] = std::numeric_limits<fgStatType>::max();
+
+      find_key_time[i] = 0;
+      max_find_key_time[i] = std::numeric_limits<fgStatType>::min();
+      min_find_key_time[i] = std::numeric_limits<fgStatType>::max();
+
+      insert_using_shifts_time[i] = 0;
+      max_insert_using_shifts_time[i] = std::numeric_limits<fgStatType>::min();
+      min_insert_using_shifts_time[i] = std::numeric_limits<fgStatType>::max();
+
+      insert_element_at_time[i] = 0;
+      max_insert_element_at_time[i] = std::numeric_limits<fgStatType>::min();
+      min_insert_element_at_time[i] = std::numeric_limits<fgStatType>::max();
+
+      get_payload_call_cnt[i] = 0;
+      insert_superroot_call_cnt[i] = 0;
+      insert_directp_call_cnt[i] = 0;
+      insert_superroot_success_cnt[i] = 0;
+      insert_directp_success_cnt[i] = 0;
+      insert_superroot_fail_cnt[i] = 0;
+      insert_directp_fail_cnt[i] = 0;
+      get_leaf_from_get_payload_call_cnt[i] = 0;
+      get_leaf_from_insert_superroot_call_cnt[i] = 0;
+      get_leaf_from_insert_directp_call_cnt[i] = 0;
+      insert_using_shifts_call_cnt[i] = 0;
+      insert_element_at_call_cnt[i] = 0;
+
+    }
+
+    resize_time = 0;
+    max_resize_time = std::numeric_limits<bgStatType>::min();
+    min_resize_time = std::numeric_limits<bgStatType>::max();
+
+    find_best_fanout_existing_node_time = 0;
+    max_find_best_fanout_existing_node_time = std::numeric_limits<bgStatType>::min();
+    min_find_best_fanout_existing_node_time = std::numeric_limits<bgStatType>::max();
+
+    split_downwards_time = 0;
+    max_split_downwards_time = std::numeric_limits<bgStatType>::min();
+    min_split_downwards_time = std::numeric_limits<bgStatType>::max();
+
+    split_sideways_time = 0;
+    max_split_sideways_time = std::numeric_limits<bgStatType>::min();
+    min_split_sideways_time = std::numeric_limits<bgStatType>::max();
+
+    lock_achieve_time = 0;
+
+    resize_call_cnt = 0;
+    find_best_fanout_existing_node_call_cnt = 0;
+    split_downwards_call_cnt = 0;
+    split_sideways_call_cnt = 0;
+    lock_achieve_cnt = 0;
+  }
+
+  //deleting profile structures
+  void profileDelete () {
+    delete[] get_payload_time;
+    delete[] max_get_payload_time;
+    delete[] min_get_payload_time;
+    delete[] insert_from_superroot_success_time;
+    delete[] max_insert_from_superroot_success_time;
+    delete[] min_insert_from_superroot_success_time;
+    delete[] insert_from_parent_success_time;
+    delete[] max_insert_from_parent_success_time;
+    delete[] min_insert_from_parent_success_time;
+    delete[] insert_from_superroot_fail_time;
+    delete[] max_insert_from_superroot_fail_time;
+    delete[] min_insert_from_superroot_fail_time;
+    delete[] insert_from_parent_fail_time;
+    delete[] max_insert_from_parent_fail_time;
+    delete[] min_insert_from_parent_fail_time;
+    delete[] get_leaf_from_get_payload_time;
+    delete[] max_get_leaf_from_get_payload_time;
+    delete[] min_get_leaf_from_get_payload_time;
+    delete[] get_leaf_from_insert_superroot_time;
+    delete[] max_get_leaf_from_insert_superroot_time;
+    delete[] min_get_leaf_from_insert_superroot_time;
+    delete[] get_leaf_from_insert_directp_time;
+    delete[] max_get_leaf_from_insert_directp_time;
+    delete[] min_get_leaf_from_insert_directp_time;
+    delete[] find_key_time;
+    delete[] max_find_key_time;
+    delete[] min_find_key_time;
+    delete[] insert_using_shifts_time;
+    delete[] max_insert_using_shifts_time;
+    delete[] min_insert_using_shifts_time;
+    delete[] insert_element_at_time;
+    delete[] max_insert_element_at_time;
+    delete[] min_insert_element_at_time;
+    delete[] get_payload_call_cnt;
+    delete[] insert_superroot_call_cnt;
+    delete[] insert_directp_call_cnt;
+    delete[] insert_superroot_success_cnt;
+    delete[] insert_directp_success_cnt;
+    delete[] insert_superroot_fail_cnt;
+    delete[] insert_directp_fail_cnt;
+    delete[] get_leaf_from_get_payload_call_cnt;
+    delete[] get_leaf_from_insert_superroot_call_cnt;
+    delete[] get_leaf_from_insert_directp_call_cnt;
+    delete[] insert_using_shifts_call_cnt;
+    delete[] insert_element_at_call_cnt;
+  }
+
+  //prints max, min, average time + call count
+  void printProfileStats() {
+    //container for saving total stats
+    fgStatType get_payload_time_cumu = 0,
+               max_get_payload_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_get_payload_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType insert_from_superroot_success_time_cumu = 0,
+               max_insert_from_superroot_success_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_insert_from_superroot_success_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType insert_from_parent_success_time_cumu = 0,
+               max_insert_from_parent_success_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_insert_from_parent_success_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType insert_from_superroot_fail_time_cumu = 0,
+               max_insert_from_superroot_fail_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_insert_from_superroot_fail_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType insert_from_parent_fail_time_cumu = 0,
+               max_insert_from_parent_fail_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_insert_from_parent_fail_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType get_leaf_from_get_payload_time_cumu = 0,
+               max_get_leaf_from_get_payload_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_get_leaf_from_get_payload_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType get_leaf_from_insert_superroot_time_cumu = 0,
+               max_get_leaf_from_insert_superroot_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_get_leaf_from_insert_superroot_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType get_leaf_from_insert_directp_time_cumu = 0,
+               max_get_leaf_from_insert_directp_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_get_leaf_from_insert_directp_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType find_key_time_cumu = 0,
+               max_find_key_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_find_key_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType insert_using_shifts_time_cumu = 0,
+               max_insert_using_shifts_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_insert_using_shifts_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType insert_element_at_time_cumu = 0,
+               max_insert_element_at_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_insert_element_at_time_cumu = std::numeric_limits<fgStatType>::max();
+    
+    uint64_t get_payload_call_cnt_total = 0;
+    uint64_t insert_superroot_call_cnt_total = 0;
+    uint64_t insert_directp_call_cnt_total = 0;
+    uint64_t insert_superroot_success_cnt_total = 0;
+    uint64_t insert_directp_success_cnt_total = 0;
+    uint64_t insert_superroot_fail_cnt_total = 0;
+    uint64_t insert_directp_fail_cnt_total = 0;
+    uint64_t get_leaf_from_get_payload_call_cnt_total = 0;
+    uint64_t get_leaf_from_insert_superroot_call_cnt_total = 0;
+    uint64_t get_leaf_from_insert_directp_call_cnt_total = 0;
+    uint64_t insert_using_shifts_call_cnt_total = 0;
+    uint64_t insert_element_at_call_cnt_total = 0;
+
+
+    std::cout << "current batch's profile result is\n\n";
+
+    for (uint32_t i = 0; i < td_num; ++i) {
+      //computation
+      get_payload_time_cumu +=  get_payload_call_cnt[i] ? get_payload_time[i] / get_payload_call_cnt[i] : 0;
+      max_get_payload_time_cumu = std::max(max_get_payload_time_cumu, max_get_payload_time[i]);
+      min_get_payload_time_cumu = std::min(min_get_payload_time_cumu, min_get_payload_time[i]);
+
+      insert_from_superroot_success_time_cumu += insert_superroot_success_cnt[i] ? 
+          insert_from_superroot_success_time[i] / insert_superroot_success_cnt[i] : 0;
+      max_insert_from_superroot_success_time_cumu = std::max(max_insert_from_superroot_success_time_cumu, max_insert_from_superroot_success_time[i]);
+      min_insert_from_superroot_success_time_cumu = std::min(min_insert_from_superroot_success_time_cumu, min_insert_from_superroot_success_time[i]);
+
+      insert_from_parent_success_time_cumu += insert_directp_success_cnt[i] ?
+          insert_from_parent_success_time[i] / insert_directp_success_cnt[i] : 0;
+      max_insert_from_parent_success_time_cumu = std::max(max_insert_from_parent_success_time_cumu, max_insert_from_parent_success_time[i]);
+      min_insert_from_parent_success_time_cumu = std::min(min_insert_from_parent_success_time_cumu, min_insert_from_parent_success_time[i]);
+
+      insert_from_superroot_fail_time_cumu += insert_superroot_fail_cnt[i] ?
+          insert_from_superroot_fail_time[i] / insert_superroot_fail_cnt[i] : 0;
+      max_insert_from_superroot_fail_time_cumu = std::max(max_insert_from_superroot_fail_time[i], max_insert_from_superroot_fail_time_cumu);
+      min_insert_from_superroot_fail_time_cumu = std::min(min_insert_from_superroot_fail_time[i], min_insert_from_superroot_fail_time_cumu);
+
+      insert_from_parent_fail_time_cumu += insert_directp_fail_cnt[i] ?
+          insert_from_parent_fail_time[i] / insert_directp_fail_cnt[i] : 0;
+      max_insert_from_parent_fail_time_cumu = std::max(max_insert_from_parent_fail_time[i], max_insert_from_parent_fail_time_cumu);
+      min_insert_from_parent_fail_time_cumu = std::min(min_insert_from_parent_fail_time[i], min_insert_from_parent_fail_time_cumu);
+
+      get_leaf_from_get_payload_time_cumu += get_leaf_from_get_payload_call_cnt[i] ?
+          get_leaf_from_get_payload_time[i] / get_leaf_from_get_payload_call_cnt[i] : 0;
+      max_get_leaf_from_get_payload_time_cumu = std::max(max_get_leaf_from_get_payload_time[i], max_get_leaf_from_get_payload_time_cumu);
+      min_get_leaf_from_get_payload_time_cumu = std::min(min_get_leaf_from_get_payload_time[i], min_get_leaf_from_get_payload_time_cumu);
+
+      get_leaf_from_insert_superroot_time_cumu += get_leaf_from_insert_superroot_call_cnt[i] ?
+          get_leaf_from_insert_superroot_time[i] / get_leaf_from_insert_superroot_call_cnt[i] : 0;
+      max_get_leaf_from_insert_superroot_time_cumu = std::max(max_get_leaf_from_insert_superroot_time[i], max_get_leaf_from_insert_superroot_time_cumu);
+      min_get_leaf_from_insert_superroot_time_cumu = std::min(min_get_leaf_from_insert_superroot_time[i], min_get_leaf_from_insert_superroot_time_cumu);
+
+      get_leaf_from_insert_directp_time_cumu += get_leaf_from_insert_directp_call_cnt[i] ?
+          get_leaf_from_insert_directp_time[i] / get_leaf_from_insert_directp_call_cnt[i] : 0;
+      max_get_leaf_from_insert_directp_time_cumu = std::max(max_get_leaf_from_insert_directp_time[i], max_get_leaf_from_insert_directp_time_cumu);
+      min_get_leaf_from_insert_directp_time_cumu = std::min(min_get_leaf_from_insert_directp_time[i], min_get_leaf_from_insert_directp_time_cumu);
+
+      get_leaf_from_insert_directp_time_cumu += get_payload_call_cnt[i] ?
+          find_key_time[i] / get_payload_call_cnt[i] : 0;
+      max_find_key_time_cumu = std::max(max_find_key_time[i], max_find_key_time_cumu);
+      min_find_key_time_cumu = std::min(min_find_key_time[i], min_find_key_time_cumu);
+
+      insert_using_shifts_time_cumu += insert_using_shifts_call_cnt[i] ?
+         insert_using_shifts_time[i] / insert_using_shifts_call_cnt[i] : 0;
+      max_insert_using_shifts_time_cumu = std::max(max_insert_using_shifts_time[i], max_insert_using_shifts_time_cumu);
+      min_insert_using_shifts_time_cumu = std::min(min_insert_using_shifts_time[i], min_insert_using_shifts_time_cumu);
+
+      insert_element_at_time_cumu += insert_element_at_call_cnt[i] ?
+          insert_element_at_time[i] / insert_element_at_call_cnt[i] : 0;
+      max_insert_element_at_time_cumu = std::max(max_insert_element_at_time[i], max_insert_element_at_time_cumu);
+      min_insert_element_at_time_cumu = std::min(min_insert_element_at_time[i], min_insert_element_at_time_cumu);
+      
+      get_payload_call_cnt_total += get_payload_call_cnt[i];
+      insert_superroot_call_cnt_total += insert_superroot_call_cnt[i];
+      insert_directp_call_cnt_total += insert_directp_call_cnt[i];
+      insert_superroot_success_cnt_total += insert_superroot_success_cnt[i];
+      insert_directp_success_cnt_total += insert_directp_success_cnt[i];
+      insert_superroot_fail_cnt_total += insert_superroot_fail_cnt[i];
+      insert_directp_fail_cnt_total += insert_directp_fail_cnt[i];
+      get_leaf_from_get_payload_call_cnt_total += get_leaf_from_get_payload_call_cnt[i];
+      get_leaf_from_insert_superroot_call_cnt_total += get_leaf_from_insert_superroot_call_cnt[i];
+      get_leaf_from_insert_directp_call_cnt_total += get_leaf_from_insert_directp_call_cnt[i];
+      insert_using_shifts_call_cnt_total += insert_using_shifts_call_cnt[i];
+      insert_element_at_call_cnt_total += insert_element_at_call_cnt[i];
+
+      //print
+      std::cout << "-thread " << i << " -\n\n";
+
+      std::cout << "-countings-\n"
+              << "get_payload_call_cnt : " << get_payload_call_cnt[i] << '\n'
+              << "insert_superroot_call_cnt : " << insert_superroot_call_cnt[i] << '\n'
+              << "insert_directp_call_cnt : " << insert_directp_call_cnt[i] << '\n'
+              << "insert_superroot_success_cnt : " << insert_superroot_success_cnt[i] << '\n'
+              << "insert_directp_success_cnt : " << insert_directp_success_cnt[i] << '\n'
+              << "insert_superroot_fail_cnt : " << insert_superroot_fail_cnt[i] << '\n'
+              << "insert_directp_fail_cnt : " << insert_directp_fail_cnt[i] << '\n'
+              << "get_leaf_from_get_payload_call_cnt : " << get_leaf_from_get_payload_call_cnt[i] << '\n'
+              << "get_leaf_from_insert_superroot_call_cnt : " << get_leaf_from_insert_superroot_call_cnt[i] << '\n'
+              << "get_leaf_from_insert_directp_call_cnt : " << get_leaf_from_insert_directp_call_cnt[i] << '\n'
+              << "insert_using_shifts_call_cnt : " << insert_using_shifts_call_cnt[i] << '\n'
+              << "insert_element_at_call_cnt : " << insert_element_at_call_cnt[i] << "\n\n";
+
+      std::cout << "-average time-\n"
+                << "get_payload_time : " << (get_payload_call_cnt[i] ? get_payload_time[i] / get_payload_call_cnt[i] : 0) << '\n'
+                << "insert_from_superroot_success_time : " << (insert_superroot_success_cnt[i] ? 
+                    insert_from_superroot_success_time[i] / insert_superroot_success_cnt[i] : 0) << '\n'
+                << "insert_from_parent_success_time : " << (insert_directp_success_cnt[i] ?
+                    insert_from_parent_success_time[i] / insert_directp_success_cnt[i] : 0) << '\n'
+                << "insert_from_superroot_fail_time : " << (insert_superroot_fail_cnt[i] ? 
+                    insert_from_superroot_fail_time[i] / insert_superroot_fail_cnt[i] : 0) << '\n'
+                << "insert_from_parent_fail_time : " << (insert_directp_fail_cnt[i] ? 
+                    insert_from_parent_fail_time[i] / insert_directp_fail_cnt[i] : 0) << '\n'
+                << "get_leaf_from_get_payload_time : " << (get_leaf_from_get_payload_call_cnt[i] ? 
+                    get_leaf_from_get_payload_time[i] / get_leaf_from_get_payload_call_cnt[i] : 0) << '\n'
+                << "get_leaf_from_insert_superroot_time : " << (get_leaf_from_insert_superroot_call_cnt[i] ?
+                    get_leaf_from_insert_superroot_time[i] / get_leaf_from_insert_superroot_call_cnt[i] : 0) << '\n'
+                << "get_leaf_from_insert_directp_time : " << (get_leaf_from_insert_directp_call_cnt[i] ?
+                    get_leaf_from_insert_directp_time[i] / get_leaf_from_insert_directp_call_cnt[i] : 0) << '\n'
+                << "find_key_time : " << (get_payload_call_cnt[i] ? find_key_time[i] / get_payload_call_cnt[i] : 0) << '\n'
+                << "insert_using_shifts_time : " << (insert_using_shifts_call_cnt[i] ?
+                    insert_using_shifts_time[i] / insert_using_shifts_call_cnt[i] : 0) << '\n'
+                << "insert_element_at_time : " << (insert_element_at_call_cnt[i] ? 
+                    insert_element_at_time[i] / insert_element_at_call_cnt[i] : 0) << "\n\n";
+
+      std::cout << "-max time-\n"
+                << "max_get_payload_time : " << max_get_payload_time[i] << '\n'
+                << "max_insert_from_superroot_success_time : " << max_insert_from_superroot_success_time[i] << '\n'
+                << "max_insert_from_parent_success_time : " << max_insert_from_parent_success_time[i] << '\n'
+                << "max_insert_from_superroot_fail_time : " << max_insert_from_superroot_fail_time[i] << '\n'
+                << "max_insert_from_parent_fail_time : " << max_insert_from_parent_fail_time[i] << '\n'
+                << "max_get_leaf_from_get_payload_time : " << max_get_leaf_from_get_payload_time[i] << '\n'
+                << "max_get_leaf_from_insert_superroot_time : " << max_get_leaf_from_insert_superroot_time[i] << '\n'
+                << "max_get_leaf_from_insert_directp_time : " << max_get_leaf_from_insert_directp_time[i] << '\n'
+                << "max_find_key_time : " << max_find_key_time[i] << '\n'
+                << "max_insert_using_shifts_time : " << max_insert_using_shifts_time[i] << '\n'
+                << "max_insert_element_at_time : " << max_insert_element_at_time[i] << "\n\n";
+
+      std::cout << "-min time-\n"
+                << "min_get_payload_time : " << min_get_payload_time[i] << '\n'
+                << "min_insert_from_superroot_success_time : " << min_insert_from_superroot_success_time[i] << '\n'
+                << "min_insert_from_parent_success_time : " << min_insert_from_parent_success_time[i] << '\n'
+                << "min_insert_from_superroot_fail_time : " << min_insert_from_superroot_fail_time[i] << '\n'
+                << "min_insert_from_parent_fail_time : " << min_insert_from_parent_fail_time[i] << '\n'
+                << "min_get_leaf_from_get_payload_time : " << min_get_leaf_from_get_payload_time[i] << '\n'
+                << "min_get_leaf_from_insert_superroot_time : " << min_get_leaf_from_insert_superroot_time[i] << '\n'
+                << "min_get_leaf_from_insert_directp_time : " << min_get_leaf_from_insert_directp_time[i] << '\n'
+                << "min_find_key_time : " << min_find_key_time[i] << '\n'
+                << "min_insert_using_shifts_time : " << min_insert_using_shifts_time[i] << '\n'
+                << "min_insert_element_at_time : " << min_insert_element_at_time[i] << "\n\n";
+    }
+
+    std::cout << "-foreground total-\n\n";
+    std::cout << "-countings-\n"
+              << "get_payload_call_cnt_total : " << get_payload_call_cnt_total << '\n'
+              << "insert_superroot_call_cnt_total : " << insert_superroot_call_cnt_total << '\n'
+              << "insert_directp_call_cnt_total : " << insert_directp_call_cnt_total << '\n'
+              << "insert_superroot_success_cnt_total : " << insert_superroot_success_cnt_total << '\n'
+              << "insert_directp_success_cnt_total : " << insert_directp_success_cnt_total << '\n'
+              << "insert_superroot_fail_cnt_total : " << insert_superroot_fail_cnt_total << '\n'
+              << "insert_directp_fail_cnt_total : " << insert_directp_fail_cnt_total << '\n'
+              << "get_leaf_from_get_payload_call_cnt_total : " << get_leaf_from_get_payload_call_cnt_total << '\n'
+              << "get_leaf_from_insert_superroot_call_cnt_total : " << get_leaf_from_insert_superroot_call_cnt_total << '\n'
+              << "get_leaf_from_insert_directp_call_cnt_total : " << get_leaf_from_insert_directp_call_cnt_total << '\n'
+              << "insert_using_shifts_call_cnt_total : " << insert_using_shifts_call_cnt_total << '\n'
+              << "insert_element_at_call_cnt_total : " << insert_element_at_call_cnt_total << "\n\n";
+
+    std::cout << "-average time-\n"
+              << "get_payload_time : " << get_payload_time_cumu / td_num << '\n'
+              << "insert_from_superroot_success_time : " << insert_from_superroot_success_time_cumu / td_num << '\n'
+              << "insert_from_parent_success_time : " << insert_from_parent_success_time_cumu / td_num << '\n'
+              << "insert_from_superroot_fail_time : " << insert_from_superroot_fail_time_cumu / td_num << '\n'
+              << "insert_from_parent_fail_time : " << insert_from_parent_fail_time_cumu / td_num << '\n'
+              << "get_leaf_from_get_payload_time : " << get_leaf_from_get_payload_time_cumu / td_num  << '\n'
+              << "get_leaf_from_insert_superroot_time : " << get_leaf_from_insert_superroot_time_cumu / td_num  << '\n'
+              << "get_leaf_from_insert_directp_time : " << get_leaf_from_insert_directp_time_cumu / td_num  << '\n'
+              << "find_key_time" << find_key_time_cumu / td_num << '\n'
+              << "insert_using_shifts_time : " << insert_using_shifts_time_cumu / td_num << '\n'
+              << "insert_element_at_time : " << insert_element_at_time_cumu / td_num  << "\n\n";
+
+
+    std::cout << "-max time-\n"
+              << "max_get_payload_time : " << max_get_payload_time_cumu << '\n'
+              << "max_insert_from_superroot_success_time : " << max_insert_from_superroot_success_time_cumu << '\n'
+              << "max_insert_from_parent_success_time : " << max_insert_from_parent_success_time_cumu << '\n'
+              << "max_insert_from_superroot_fail_time : " << max_insert_from_superroot_fail_time_cumu << '\n'
+              << "max_insert_from_parent_fail_time : " << max_insert_from_parent_fail_time_cumu << '\n'
+              << "max_get_leaf_from_get_payload_time : " << max_get_leaf_from_get_payload_time_cumu << '\n'
+              << "max_get_leaf_from_insert_superroot_time : " << max_get_leaf_from_insert_superroot_time_cumu << '\n'
+              << "max_get_leaf_from_insert_directp_time : " << max_get_leaf_from_insert_directp_time_cumu << '\n'
+              << "max_find_key_time : " << max_find_key_time_cumu << '\n'
+              << "max_insert_using_shifts_time : " << max_insert_using_shifts_time_cumu << '\n'
+              << "max_insert_element_at_time : " << max_insert_element_at_time_cumu << "\n\n";
+
+
+    std::cout << "-min time-\n"
+              << "min_get_payload_time : " << min_get_payload_time_cumu << '\n'
+              << "min_insert_from_superroot_success_time : " << min_insert_from_superroot_success_time_cumu << '\n'
+              << "min_insert_from_parent_success_time : " << min_insert_from_parent_success_time_cumu << '\n'
+              << "min_insert_from_superroot_fail_time : " << min_insert_from_superroot_fail_time_cumu << '\n'
+              << "min_insert_from_parent_fail_time : " << min_insert_from_parent_fail_time_cumu << '\n'
+              << "min_get_leaf_from_get_payload_time : " << min_get_leaf_from_get_payload_time_cumu << '\n'
+              << "min_get_leaf_from_insert_superroot_time : " << min_get_leaf_from_insert_superroot_time_cumu << '\n'
+              << "min_get_leaf_from_insert_directp_time : " << min_get_leaf_from_insert_directp_time_cumu << '\n'
+              << "min_find_key_time" << min_find_key_time_cumu << '\n'
+              << "min_insert_using_shifts_time : " << min_insert_using_shifts_time_cumu << '\n'
+              << "min_insert_element_at_time : " << min_insert_element_at_time_cumu << "\n\n";
+
+
+    std::cout << "-background threads-\n\n";
+    std::cout << "-countings-\n"
+              << "resize_call_cnt : " << resize_call_cnt << '\n'
+              << "find_best_fanout_existing_node_call_cnt : " << find_best_fanout_existing_node_call_cnt << '\n'
+              << "split_downwards_call_cnt : " << split_downwards_call_cnt << '\n'
+              << "split_sideways_call_cnt : " << split_sideways_call_cnt << "\n\n";
+    
+    std::cout << "-average-\n"
+              << "resize_time : " << (resize_call_cnt ? resize_time / resize_call_cnt : 0) << '\n'
+              << "find_best_fanout_existing_node_time : " << (find_best_fanout_existing_node_call_cnt ?
+                  find_best_fanout_existing_node_time / find_best_fanout_existing_node_call_cnt : 0) << '\n'
+              << "split_downwards_time : " << (split_downwards_call_cnt ?
+                  split_downwards_time / split_downwards_call_cnt : 0) << '\n'
+              << "split_sideways_time : " << (split_sideways_call_cnt ? 
+                  split_sideways_time / split_sideways_call_cnt : 0) << "\n\n";
+
+    std::cout << "-max time-\n"
+              << "resize_time : " << max_resize_time << '\n'
+              << "find_best_fanout_existing_node_time : " << max_find_best_fanout_existing_node_time << '\n'
+              << "split_downwards_time : " << max_split_downwards_time << '\n'
+              << "split_sideways_time : " << max_split_sideways_time << "\n\n";
+    
+    std::cout << "-min time-\n"
+              << "resize_time : " << min_resize_time << '\n'
+              << "find_best_fanout_existing_node_time : " << min_find_best_fanout_existing_node_time << '\n'
+              << "split_downwards_time : " << min_split_downwards_time << '\n'
+              << "split_sideways_time : " << min_split_sideways_time << "\n\n";
+
+    std::cout << "-lock-\n"
+              << "lock_achive_cnt : " << lock_achieve_cnt << '\n'
+              << "lock_achive_time average : " << (lock_achieve_cnt ? lock_achieve_time / lock_achieve_cnt : 0) << "\n\n";
+
+  }
+};
+
+ProfileStats profileStats;
+
 /* utils for multithreading
  * Many of this code is copied from Xindex */
 
@@ -728,12 +1284,17 @@ struct AtomicVal {
   uint64_t get_version(uint64_t status) { return status & version_mask; }
 
   void lock() {
+    profileStats.lock_achieve_cnt++;
+    auto lock_start_time = std::chrono::high_resolution_clock::now();
     while (true) {
       uint64_t old = status;
       uint64_t expected = old & ~lock_mask;  // expect to be unlocked
       uint64_t desired = old | lock_mask;    // desire to lock
       if (likely(cmpxchg((uint64_t *)&this->status, expected, desired) ==
                  expected)) {
+        auto lock_end_time = std::chrono::high_resolution_clock::now();
+        auto elapsed_time = std::chrono::duration_cast<std::chrono::nanoseconds>(lock_end_time - lock_start_time).count();
+        profileStats.lock_achieve_time += elapsed_time;
         return;
       }
     }
@@ -1050,5 +1611,4 @@ void rcu_barrier(const uint32_t worker_id) {
   coutLock.unlock();
 #endif
 }
-
 }

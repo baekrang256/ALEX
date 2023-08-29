@@ -160,9 +160,11 @@ int main(int argc, char* argv[]) {
   std::cout << std::scientific;
   std::cout << std::setprecision(3);
   alex::rcu_alloc();
+  alex::profileStats.profileInit(td_num);
 
   // Run workload
   while (true) {
+    alex::profileStats.profileReInit();
     alex::rcu_init();
     batch_no++;
     std::cout << "batch starts with no : " << batch_no << std::endl;
@@ -227,6 +229,8 @@ int main(int argc, char* argv[]) {
                 << "\ninserted range is " << inserted_range 
                 << "\nfailed cnt is " << failed_cnt << std::endl;
     }
+    
+    alex::profileStats.printProfileStats();
 
     // Check for workload end conditions
     if (insert_frac != 0 && inserted_range >= total_num_keys) {
@@ -250,6 +254,7 @@ int main(int argc, char* argv[]) {
 
   delete[] values;
   delete[] keys;
+  alex::profileStats.profileDelete();
 }
 
 

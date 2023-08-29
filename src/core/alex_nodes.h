@@ -1726,8 +1726,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 
   // Searches for the last non-gap position equal to key
   // If no positions equal to key, returns -1
-  int find_key(const AlexKey<T>& key) {
+  int find_key(const AlexKey<T>& key, uint32_t worker_id) {
     //start searching when no write is running.
+    auto find_key_start_time = std::chrono::high_resolution_clock::now();
+
     num_lookups_++;
     int predicted_pos = predict_position(key);
 
@@ -1737,6 +1739,14 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     if (pos < 0 || !key_equal(ALEX_DATA_NODE_KEY_AT(pos), key)) {
       return -1;
     } else {
+      auto find_key_end_time = std::chrono::high_resolution_clock::now();
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(find_key_end_time - find_key_start_time).count();
+      profileStats.find_key_time[worker_id] += elapsed_time;
+      profileStats.max_find_key_time[worker_id] =
+        std::max(profileStats.max_find_key_time[worker_id], elapsed_time);
+      profileStats.min_find_key_time[worker_id] =
+        std::min(profileStats.min_find_key_time[worker_id], elapsed_time);
+
       return pos;
     }
   }
@@ -2002,10 +2012,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     insertion_position = positions.first;
     if (insertion_position < data_capacity_ &&
         !check_exists(insertion_position)) {
-      insert_element_at(key, payload, insertion_position, 1);
+      insert_element_at(key, payload, insertion_position, worker_id, 1);
     } else {
       insertion_position =
-          insert_using_shifts(key, payload, insertion_position);
+          insert_using_shifts(key, payload, insertion_position, worker_id);
     }
     // Update stats
     num_keys_++;
@@ -2018,6 +2028,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // For multithreading : makes new node with resized data node.
   void resize(double target_density, bool force_retrain = false,
               bool keep_left = false, bool keep_right = false) {
+
+    profileStats.resize_call_cnt++;
+    auto resize_start_time = std::chrono::high_resolution_clock::now();
+
     if (num_keys_ == 0) {
       return;
     }
@@ -2150,6 +2164,14 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
                  static_cast<double>(data_capacity_));
     contraction_threshold_ = data_capacity_ * kMinDensity_;
     key_array_rw_lock.write_finished();
+
+    auto resize_end_time = std::chrono::high_resolution_clock::now();
+    auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(resize_end_time - resize_start_time).count();
+    profileStats.resize_time += elapsed_time;
+    profileStats.max_resize_time = 
+      std::max(profileStats.max_resize_time.load(), elapsed_time);
+    profileStats.min_resize_time =
+      std::min(profileStats.min_resize_time.load(), elapsed_time);
   }
 
   inline bool is_append_mostly_right() const {
@@ -2166,8 +2188,13 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // Insert key into pos. The caller must guarantee that pos is a gap.
   // mode 0 : rw_lock already obtained, no need for another write wait (for insert_using_shifts)
   // mode 1 : rw_lock not obtained, need to do write wait (for other use cases)
-  void insert_element_at(const AlexKey<T>& key, P payload, int pos, int mode = 0) {
-    if (mode == 1) {key_array_rw_lock.write_wait();} //synchronization.
+  void insert_element_at(const AlexKey<T>& key, P payload, int pos, 
+                         uint32_t worker_id, int mode = 0) {
+    auto insert_element_at_start_time = std::chrono::high_resolution_clock::now();
+    if (mode == 1) {
+      profileStats.insert_element_at_call_cnt[worker_id]++;
+      key_array_rw_lock.write_wait(); //synchronization
+    }
 #if ALEX_DATA_NODE_SEP_ARRAYS
     key_slots_[pos] = key;
     payload_slots_[pos] = payload;
@@ -2182,13 +2209,25 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       ALEX_DATA_NODE_KEY_AT(pos) = key;
       pos--;
     }
-    if (mode == 1) {key_array_rw_lock.write_finished();}
+    if (mode == 1) {
+      key_array_rw_lock.write_finished();
+      auto insert_element_at_end_time = std::chrono::high_resolution_clock::now();
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_element_at_end_time - insert_element_at_start_time).count();
+      profileStats.insert_element_at_time[worker_id] += elapsed_time;
+      profileStats.max_insert_element_at_time[worker_id] =
+        std::max(profileStats.max_insert_element_at_time[worker_id], elapsed_time);
+      profileStats.min_insert_element_at_time[worker_id] =
+        std::min(profileStats.min_insert_element_at_time[worker_id], elapsed_time);
+  
+    }
   }
 
   // Insert key into pos, shifting as necessary in the range [left, right)
   // Returns the actual position of insertion
-  int insert_using_shifts(const AlexKey<T>& key, P payload, int pos) {
+  int insert_using_shifts(const AlexKey<T>& key, P payload, int pos, uint32_t worker_id) {
     // Find the closest gap
+    profileStats.insert_using_shifts_call_cnt[worker_id]++;
+    auto insert_using_shifts_start_time = std::chrono::high_resolution_clock::now();
     int gap_pos = closest_gap(pos);
     //std::cout << "gap pos is " << gap_pos << std::endl;
     set_bit(gap_pos);
@@ -2202,9 +2241,17 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         data_slots_[i] = data_slots_[i - 1];
 #endif
       }
-      insert_element_at(key, payload, pos);
+      insert_element_at(key, payload, pos, worker_id);
       num_shifts_ += gap_pos - pos;
       key_array_rw_lock.write_finished();
+      auto insert_using_shifts_end_time = std::chrono::high_resolution_clock::now();
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_using_shifts_end_time - insert_using_shifts_start_time).count();
+      //should decrement insert_elemnt_at cnt + should not update insert_element_at time?
+      profileStats.insert_using_shifts_time[worker_id] += elapsed_time;
+      profileStats.max_insert_using_shifts_time[worker_id] =
+        std::max(profileStats.max_insert_using_shifts_time[worker_id], elapsed_time);
+      profileStats.min_insert_using_shifts_time[worker_id] =
+        std::min(profileStats.min_insert_using_shifts_time[worker_id], elapsed_time);
       return pos;
     } else {
       for (int i = gap_pos; i < pos - 1; i++) {
@@ -2215,9 +2262,17 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         data_slots_[i] = data_slots_[i + 1];
 #endif
       }
-      insert_element_at(key, payload, pos - 1);
+      insert_element_at(key, payload, pos - 1, worker_id);
       num_shifts_ += pos - gap_pos - 1;
       key_array_rw_lock.write_finished();
+      auto insert_using_shifts_end_time = std::chrono::high_resolution_clock::now();
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_using_shifts_end_time - insert_using_shifts_start_time).count();
+      //should decrement insert_elemnt_at cnt + should not update insert_element_at time?
+      profileStats.insert_using_shifts_time[worker_id] += elapsed_time;
+      profileStats.max_insert_using_shifts_time[worker_id] =
+        std::max(profileStats.max_insert_using_shifts_time[worker_id], elapsed_time);
+      profileStats.min_insert_using_shifts_time[worker_id] =
+        std::min(profileStats.min_insert_using_shifts_time[worker_id], elapsed_time);
       return pos - 1;
     }
   }
