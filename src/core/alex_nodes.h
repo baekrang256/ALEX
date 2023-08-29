@@ -1977,12 +1977,12 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     self_type *resized_data_node = nullptr;
     // Check if node is full (based on expansion_threshold)
     if (num_keys_ >= expansion_threshold_) {
-      //if (significant_cost_deviation()) {
-      //  return {{1, -1}, {this, nullptr}};
-      //}
-      //if (catastrophic_cost()) {
-      //  return {{2, -1}, {this, nullptr}};
-      //}
+      if (significant_cost_deviation()) {
+        return {{1, -1}, {this, nullptr}};
+      }
+      if (catastrophic_cost()) {
+        return {{2, -1}, {this, nullptr}};
+      }
       if (num_keys_ > max_slots_ * kMinDensity_) {
         return {{3, -1}, {this, nullptr}};
       }
