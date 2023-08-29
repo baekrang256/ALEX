@@ -414,24 +414,19 @@ int find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
       typename AlexDataNode<T, P>::const_iterator_type it(node, left_boundary);
       if (i == fanout - 1) {right_boundary = node->data_capacity_;}
       else {
-        if (typeid(char) != typeid(T)) { /* numeric key */
-          AlexKey<T> tmpkey = AlexKey<T>(node->max_key_length_);
-          tmpkey.key_arr_[0] = (T) ((i + 1) - b) / a[0];
-          right_boundary = node->lower_bound(tmpkey);
-        }
-        else { /* string key */
-          /* we iterate through the key array to find the smallest key resulting to i + 1*/
-          char flag = 1;
-          AlexKey<T> tmpkey = AlexKey<T>(node->max_key_length_);
-          for (; !it.is_end(); it++) {
-            if (node->model_.predict(it.key()) >= i+1) {
-              flag = 0;
-              right_boundary = it.cur_idx_;
-              break;
-            }
+        /* string key */
+        /* we iterate through the key array to find the smallest key resulting to i + 1*/
+        char flag = 1;
+        AlexKey<T> tmpkey = AlexKey<T>(node->max_key_length_);
+        for (; !it.is_end(); it++) {
+          if (node->model_.predict(it.key()) >= i+1) {
+            flag = 0;
+            right_boundary = it.cur_idx_;
+            break;
           }
-          if (flag) {right_boundary = node->data_capacity_ - 1;}
         }
+        if (flag) {right_boundary = node->data_capacity_ - 1;}
+        
       }
 
       if (left_boundary == right_boundary) {
