@@ -1048,7 +1048,7 @@ struct ProfileStats {
       max_get_leaf_from_insert_directp_time_cumu = std::max(max_get_leaf_from_insert_directp_time[i], max_get_leaf_from_insert_directp_time_cumu);
       min_get_leaf_from_insert_directp_time_cumu = std::min(min_get_leaf_from_insert_directp_time[i], min_get_leaf_from_insert_directp_time_cumu);
 
-      get_leaf_from_insert_directp_time_cumu += get_payload_call_cnt[i] ?
+      find_key_time_cumu += get_payload_call_cnt[i] ?
           find_key_time[i] / get_payload_call_cnt[i] : 0;
       max_find_key_time_cumu = std::max(max_find_key_time[i], max_find_key_time_cumu);
       min_find_key_time_cumu = std::min(min_find_key_time[i], min_find_key_time_cumu);
