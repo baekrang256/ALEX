@@ -11,12 +11,12 @@ if(CMAKE_BUILD_TYPE STREQUAL Debug)
 endif()
 
 if(MSVC)
-    set(CMAKE_CXX_FLAGS "/O2 /arch:AVX2 /pg /W1 /EHsc")
+    set(CMAKE_CXX_FLAGS "/O2 /arch:AVX2 /W1 /EHsc")
 elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
-    set(CMAKE_CXX_FLAGS "-O3 -xHost -pg")
+    set(CMAKE_CXX_FLAGS "-O3 -xHost")
 else()
     # clang and gcc
-    set(CMAKE_CXX_FLAGS "-O3 -march=native -pg -Wall -Wextra")
+    set(CMAKE_CXX_FLAGS "-O3 -march=native -Wall -Wextra")
 endif()
 
 link_directories(${MKL_LINK_DIRECTORY})
