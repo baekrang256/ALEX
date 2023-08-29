@@ -1194,7 +1194,7 @@ struct ProfileStats {
               << "min_get_leaf_from_get_payload_time : " << min_get_leaf_from_get_payload_time_cumu << '\n'
               << "min_get_leaf_from_insert_superroot_time : " << min_get_leaf_from_insert_superroot_time_cumu << '\n'
               << "min_get_leaf_from_insert_directp_time : " << min_get_leaf_from_insert_directp_time_cumu << '\n'
-              << "min_find_key_time" << min_find_key_time_cumu << '\n'
+              << "min_find_key_time : " << min_find_key_time_cumu << '\n'
               << "min_insert_using_shifts_time : " << min_insert_using_shifts_time_cumu << '\n'
               << "min_insert_element_at_time : " << min_insert_element_at_time_cumu << "\n\n";
 
