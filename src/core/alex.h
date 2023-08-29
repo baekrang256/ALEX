@@ -107,27 +107,7 @@ class Alex {
   DerivedParams derived_params_;
 
   /* Counters, useful for benchmarking and profiling */
-  struct Stats {
-    AtomicVal<int> num_keys = 0;
-    AtomicVal<int> num_model_nodes = 0;  // num model nodes
-    AtomicVal<int> num_data_nodes = 0;   // num data nodes
-    AtomicVal<int> num_expand_and_scales = 0;
-    AtomicVal<int> num_expand_and_retrains = 0;
-    AtomicVal<int> num_downward_splits = 0;
-    AtomicVal<int> num_sideways_splits = 0;
-    AtomicVal<int> num_model_node_expansions = 0;
-    AtomicVal<int> num_model_node_splits = 0;
-    AtomicVal<long long> num_downward_split_keys = 0;
-    AtomicVal<long long> num_sideways_split_keys = 0;
-    AtomicVal<long long> num_model_node_expansion_pointers = 0;
-    AtomicVal<long long> num_model_node_split_pointers = 0;
-    AtomicVal<long long> num_node_lookups = 0;
-    AtomicVal<long long> num_lookups = 0;
-    AtomicVal<long long> num_inserts = 0;
-    AtomicVal<double> splitting_time = 0;
-    AtomicVal<double> cost_computation_time = 0;
-  };
-  Stats stats_;
+  AtomicVal<int> num_keys = AtomicVal<int>(0);
 
  private:
   /* Structs used internally */
@@ -196,7 +176,6 @@ class Alex {
         data_node_type(1, nullptr, key_less_, allocator_);
     empty_data_node->bulk_load(nullptr, 0);
     root_node_ = empty_data_node;
-    stats_.num_data_nodes++;
     create_superroot();
   }
 
@@ -215,7 +194,6 @@ class Alex {
         data_node_type(max_key_length_, nullptr, key_less_, allocator_);
     empty_data_node->bulk_load(nullptr, 0);
     root_node_ = empty_data_node;
-    stats_.num_data_nodes.increment();
     create_superroot();
   }  
 
@@ -232,7 +210,6 @@ class Alex {
         data_node_type(1, nullptr, key_less_, allocator_);
     empty_data_node->bulk_load(nullptr, 0);
     root_node_ = empty_data_node;
-    stats_.num_data_nodes++;
     create_superroot();
   }
 
@@ -248,7 +225,6 @@ class Alex {
         data_node_type(1, nullptr, key_less_, allocator_);
     empty_data_node->bulk_load(nullptr, 0);
     root_node_ = empty_data_node;
-    stats_.num_data_nodes++;
     create_superroot();
   }
 
@@ -334,7 +310,6 @@ class Alex {
   explicit Alex(const self_type& other)
       : params_(other.params_),
         derived_params_(other.derived_params_),
-        stats_(other.stats_),
         istats_(other.istats_),
         key_less_(other.key_less_),
         allocator_(other.allocator_),
@@ -348,6 +323,7 @@ class Alex {
     superroot_ =
         static_cast<model_node_type*>(copy_tree_recursive(other.superroot_));
     root_node_ = superroot_->children_[0].node_ptr_;
+    num_keys.val_ = other.num_keys.val_;
   }
 
   Alex& operator=(const self_type& other) {
@@ -362,7 +338,7 @@ class Alex {
       params_ = other.params_;
       derived_params_ = other.derived_params_;
       istats_ = other.istats_;
-      stats_ = other.stats_;
+      num_keys.val_ = other.num_keys.val_;
       key_less_ = other.key_less_;
       allocator_ = other.allocator_;
       max_key_length_ = other.max_key_length_;
@@ -382,14 +358,16 @@ class Alex {
   void swap(const self_type& other) {
     std::swap(params_, other.params_);
     std::swap(derived_params_, other.derived_params_);
-    std::swap(istats_, other.istats_);
-    std::swap(stats_, other.stats_);
     std::swap(key_less_, other.key_less_);
     std::swap(allocator_, other.allocator_);
 
     unsigned int arb_max_key_length_ = max_key_length_;
     max_key_length_ = other.max_key_length_;
     other.max_key_length_ = arb_max_key_length_;
+    
+    auto arb_num_keys = num_keys.val_;
+    num_keys.val_ = other.num_keys.val_;
+    other.num_keys.val_ = num_keys.val_;
 
     std::swap(istats_.key_domain_min_, other.istats_.key_domain_min_);
     std::swap(istats_.key_domain_max_, other.istats_.key_domain_max_);
@@ -1053,7 +1031,6 @@ EmptyNodeStart:
       }
 
       if (cur->is_leaf_) {
-        stats_.num_node_lookups.add(cur->level_);
         // we don't do rcu_progress here, since we are entering data node.
         // rcu_progress should be called at adequate point where the users finished using this data node.
         // If done ignorantly, it could cause null pointer access (because of destruction by other thread)
@@ -1226,12 +1203,12 @@ EmptyNodeStart:
   // The number of elements should be num_keys.
   // The index must be empty when calling this method.
   void bulk_load(const V values[], int num_keys) {
-    if (stats_.num_keys.val_ > 0 || num_keys <= 0) {
+    if (this->num_keys.val_ > 0 || num_keys <= 0) {
       return;
     }
     delete_node(root_node_);  // delete the empty root node from constructor
 
-    stats_.num_keys.val_ = num_keys;
+    this->num_keys.val_ = num_keys;
 
     // Build temporary root model, which outputs a CDF in the range [0, 1]
     root_node_ =
@@ -1312,7 +1289,6 @@ EmptyNodeStart:
   // Updates the key domain based on the min/max keys and retrains the model.
   // Should only be called immediately after bulk loading
   void update_superroot_key_domain() {
-    assert(stats_.num_inserts.val_ == 0 || root_node_->is_leaf_);
     T *min_key_arr, *max_key_arr;
     //min/max should always be '!' and '~...~'
     //the reason we are doing this cumbersome process is because
@@ -1419,7 +1395,6 @@ EmptyNodeStart:
     if (num_keys <= derived_params_.max_data_node_slots *
                         data_node_type::kInitDensity_ &&
         (node->cost_ < kNodeLookupsWeight || node->model_.a_ == 0)) {
-      stats_.num_data_nodes.increment();
       auto data_node = new (data_node_allocator().allocate(1))
           data_node_type(node->level_, derived_params_.max_data_node_slots,
                          node->max_key_length_, parent,
@@ -1457,7 +1432,6 @@ EmptyNodeStart:
       std::cout << "decided that current bulk_load_node calling node should be model node" << std::endl;
 #endif
       // Convert to model node based on the output of the fanout tree
-      stats_.num_model_nodes.increment();
       auto model_node = new (model_node_allocator().allocate(1))
           model_node_type(node->level_, parent, max_key_length_, allocator_);
       if (best_fanout_tree_depth == 0) {
@@ -1646,7 +1620,6 @@ EmptyNodeStart:
       std::cout << "decided that current bulk_load_node calling node should be data node" << std::endl;
 #endif
       // Convert to data node
-      stats_.num_data_nodes.increment();
       auto data_node = new (data_node_allocator().allocate(1))
           data_node_type(node->level_, derived_params_.max_data_node_slots,
                          max_key_length_, parent,
@@ -1677,7 +1650,6 @@ EmptyNodeStart:
     auto node = new (this_ptr->data_node_allocator().allocate(1))
         data_node_type(existing_node->max_key_length_, existing_node->parent_, 
                        this_ptr->key_less_, this_ptr->allocator_);
-    this_ptr->stats_.num_data_nodes.increment();
     if (tree_node) {
       // Use the model and num_keys saved in the tree node so we don't have to
       // recompute it
@@ -1725,7 +1697,6 @@ EmptyNodeStart:
   // NOTE : the user should adequately call rcu_progress with thread_id for proper progress
   //        or use it when no other thread is working on ALEX.
   typename self_type::Iterator lower_bound(const AlexKey<T>& key) {
-    stats_.num_lookups++;
     data_node_type* leaf = get_leaf(key, 0);
     if (leaf == nullptr) {return end();}
     int idx = leaf->find_lower(key);
@@ -1734,7 +1705,6 @@ EmptyNodeStart:
   }
 
   typename self_type::ConstIterator lower_bound(const AlexKey<T>& key) const {
-    stats_.num_lookups++;
     data_node_type* leaf = get_leaf(key, 0);
     if (leaf == nullptr) {return cend();}
     int idx = leaf->find_lower(key);
@@ -1748,7 +1718,6 @@ EmptyNodeStart:
   // NOTE : the user should adequately call rcu_progress with thread_id for proper progress
   //        or use it when no other thread is working on ALEX.
   typename self_type::Iterator upper_bound(const AlexKey<T>& key) {
-    stats_.num_lookups++;
     data_node_type* leaf = typeid(T) == typeid(char) ? get_leaf(key, 0) : get_leaf(key);
     if (leaf == nullptr) {return end();}
     int idx = leaf->find_upper(key);
@@ -1757,7 +1726,6 @@ EmptyNodeStart:
   }
 
   typename self_type::ConstIterator upper_bound(const AlexKey<T>& key) const {
-    stats_.num_lookups++;
     data_node_type* leaf = typeid(T) == typeid(char) ? get_leaf(key, 0) : get_leaf(key);
     if (leaf == nullptr) {return cend();}
     int idx = leaf->find_upper(key);
@@ -1780,7 +1748,6 @@ public:
   std::pair<bool, P> get_payload(const AlexKey<T>& key, int32_t worker_id) {
     profileStats.get_payload_call_cnt[worker_id]++;
     auto get_payload_start_time = std::chrono::high_resolution_clock::now();
-    stats_.num_lookups.increment();
     data_node_type* leaf = get_leaf(key, worker_id, 0);
     if (leaf == nullptr) {
       rcu_progress(worker_id);
@@ -1819,7 +1786,6 @@ public:
   // NOTE : the user should adequately call rcu_progress with thread_id for proper progress
   //        or use it when no other thread is working on ALEX.
   typename self_type::Iterator find_last_no_greater_than(const AlexKey<T>& key) {
-    stats_.num_lookups++;
     data_node_type* leaf = get_leaf(key, 0);
     if (leaf == nullptr) {return end();}
     const int idx = leaf->upper_bound(key) - 1;
@@ -2024,8 +1990,7 @@ public:
 #endif
       leaf->unused.unlock();
       memory_fence();
-      stats_.num_inserts.increment();
-      stats_.num_keys.increment();
+      num_keys.increment();
       rcu_progress(worker_id);
       auto insert_from_parent_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_from_parent_end_time - insert_from_parent_start_time).count();
@@ -2170,7 +2135,6 @@ public:
     alex::coutLock.unlock();
 #endif
     auto start_time = std::chrono::high_resolution_clock::now();
-    this_ptr->stats_.num_expand_and_scales.add(leaf->num_resizes_);
 
 #if DEBUG_PRINT
     alex::coutLock.lock();
@@ -2183,12 +2147,10 @@ public:
 
     int fanout_tree_depth = 1;
     fanout_tree_depth = fanout_tree::find_best_fanout_existing_node<T, P>(
-          leaf, this_ptr->stats_.num_keys.read(), used_fanout_tree_nodes, 2, worker_id);
+          leaf, this_ptr->num_keys.read(), used_fanout_tree_nodes, 2, worker_id);
               
     int best_fanout = 1 << fanout_tree_depth;
     auto cur_time = std::chrono::high_resolution_clock::now();
-    this_ptr->stats_.cost_computation_time.add(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(cur_time - start_time).count());
 
 #if DEBUG_PRINT
     alex::coutLock.lock();
@@ -2216,7 +2178,6 @@ public:
           tree_node.expected_avg_search_iterations;
       leaf->expected_avg_shifts_ = tree_node.expected_avg_shifts;
       leaf->reset_stats();
-      this_ptr->stats_.num_expand_and_retrains.increment();
 
       leaf->unused.lock();
       memory_fence();
@@ -2274,9 +2235,6 @@ public:
     }
     auto end_time = std::chrono::high_resolution_clock::now();
     auto duration = end_time - start_time;
-    this_ptr->stats_.splitting_time.add(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(duration)
-            .count());
 
     //empty used_fanout_tree_nodes for preventing memory leakage.
     for (fanout_tree::FTNode& tree_node : used_fanout_tree_nodes) {delete[] tree_node.a;}
@@ -2310,8 +2268,6 @@ public:
     std::cout << "and leaf is : " << leaf << std::endl;
     alex::coutLock.unlock();
 #endif
-    this_ptr->stats_.num_downward_splits.increment();
-    this_ptr->stats_.num_downward_split_keys.add(leaf->num_keys_);
 
     // Create the new model node that will replace the current data node
     int fanout = 1 << fanout_tree_depth;
@@ -2369,9 +2325,6 @@ public:
       switched_children = create_new_data_nodes(leaf, new_node, fanout_tree_depth,
                             used_fanout_tree_nodes, worker_id, this_ptr);
     }
-
-    this_ptr->stats_.num_data_nodes.decrement();
-    this_ptr->stats_.num_model_nodes.increment();
 
     //substitute pointers in parent model node
     parent->children_.lock();
@@ -2443,8 +2396,6 @@ public:
     profileStats.split_sideways_call_cnt++;
     auto split_sideways_start_time = std::chrono::high_resolution_clock::now();
     auto leaf = static_cast<data_node_type*>((parent->children_.read())[bucketID].node_ptr_);
-    this_ptr->stats_.num_sideways_splits.increment();
-    this_ptr->stats_.num_sideways_split_keys.add(leaf->num_keys_);
 
     int fanout = 1 << fanout_tree_depth;
     int repeats = 1 << leaf->duplication_factor_;
@@ -2478,8 +2429,6 @@ public:
     rcu_barrier();
     this_ptr->delete_node(leaf);
     delete parent_old_children;
-
-    this_ptr->stats_.num_data_nodes.decrement();
 
     auto split_sideways_end_time = std::chrono::high_resolution_clock::now();
     auto elapsed_time = std::chrono::duration_cast<std::chrono::bgTimeUnit>(split_sideways_end_time - split_sideways_start_time).count();
@@ -2804,7 +2753,7 @@ public:
 
  public:
   // Number of elements
-  size_t size() const { return static_cast<size_t>(stats_.num_keys.read()); }
+  size_t size() { return static_cast<size_t>(num_keys.read()); }
 
   // True if there are no elements
   bool empty() const { return (size() == 0); }
@@ -2837,17 +2786,6 @@ public:
     }
     return size;
   }
-
-  // Total number of nodes in the RMI
-  int num_nodes() const {
-    return stats_.num_data_nodes.read() + stats_.num_model_nodes.read();
-  };
-
-  // Number of data nodes in the RMI
-  int num_leaves() const { return stats_.num_data_nodes.read(); };
-
-  // Return a const reference to the current statistics
-  const struct Stats& get_stats() const { return stats_; }
 
   /*** Debugging ***/
 
