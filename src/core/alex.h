@@ -465,6 +465,7 @@ class Alex {
       int mode = 1, std::vector<TraversalNode<T, P>>* traversal_path = nullptr) {
     
     auto get_leaf_from_parent_start_time = std::chrono::high_resolution_clock::now();
+    node_type* cur = starting_parent == superroot_ ? root_node_ : starting_parent;
     if (mode == 0) {
       profileStats.get_leaf_from_get_payload_call_cnt[worker_id]++;
     }
@@ -475,7 +476,6 @@ class Alex {
       profileStats.get_leaf_from_insert_directp_call_cnt[worker_id]++;
     }
 
-    node_type* cur = starting_parent;
     if (cur->is_leaf_) {
       //normally shouldn't happen, since normally starting node is always model node.
       return static_cast<data_node_type*>(cur);
@@ -1256,13 +1256,6 @@ EmptyNodeStart:
     bulk_load_node(values, num_keys, root_node_, nullptr, num_keys,
                    &root_data_node_model);
 
-    if (root_node_->is_leaf_) {
-      static_cast<data_node_type*>(root_node_)
-          ->expected_avg_exp_search_iterations_ = stats.num_search_iterations;
-      static_cast<data_node_type*>(root_node_)->expected_avg_shifts_ =
-          stats.num_shifts;
-    }
-
     create_superroot();
     update_superroot_key_domain();
     link_all_data_nodes();
@@ -1394,7 +1387,8 @@ EmptyNodeStart:
 #endif
     if (num_keys <= derived_params_.max_data_node_slots *
                         data_node_type::kInitDensity_ &&
-        (node->cost_ < kNodeLookupsWeight || node->model_.a_ == 0)) {
+        (node->cost_ < kNodeLookupsWeight || node->model_.a_ == 0) &&
+        (node != root_node_)) {
       auto data_node = new (data_node_allocator().allocate(1))
           data_node_type(node->level_, derived_params_.max_data_node_slots,
                          node->max_key_length_, parent,
