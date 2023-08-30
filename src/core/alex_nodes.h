@@ -407,7 +407,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 #endif
 
   AtomicVal<P> unused = AtomicVal<P>(0); // whether data node exists in alex or is about to be removed.
-  RW_lock key_array_rw_lock = RW_lock();
+  pthread_rwlock_t key_array_rw_lock = PTHREAD_RWLOCK_INITIALIZER;
 
   /* Below are unused attributes */
   //unsigned int max_key_length_ = 1; // maximum length of each key 
@@ -483,16 +483,9 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     the_max_key_arr_ = new T[1];
     the_min_key_arr_ = new T[1];
 
-    if (typeid(T) != typeid(char)) { //numeric key
-      kEndSentinel[0] = STR_VAL_MAX;
-      the_max_key_arr_[0] = std::numeric_limits<T>::max();
-      the_min_key_arr_[0] = std::numeric_limits<T>::lowest();
-    }
-    else { // string key
-      kEndSentinel[0] = STR_VAL_MAX;
-      the_max_key_arr_[0] = STR_VAL_MAX;
-      the_min_key_arr_[0] = STR_VAL_MIN;
-    }
+    kEndSentinel[0] = STR_VAL_MAX;
+    the_max_key_arr_[0] = STR_VAL_MAX;
+    the_min_key_arr_[0] = STR_VAL_MIN;
   }
 
   explicit AlexDataNode(unsigned int max_key_length, model_node_type *parent,
@@ -503,23 +496,14 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     kEndSentinel_.max_key_length_ = max_key_length;
     the_max_key_arr_ = new T[max_key_length];
     the_min_key_arr_ = new T[max_key_length];
-
-    if (typeid(T) != typeid(char)) { //numeric key
-      std::fill(kEndSentinel_arr, kEndSentinel_arr + max_key_length,
-          std::numeric_limits<T>::max());
-      std::fill(the_max_key_arr_, the_max_key_arr_ + max_key_length,
-          std::numeric_limits<T>::max());
-      std::fill(the_min_key_arr_, the_min_key_arr_ + max_key_length,
-          std::numeric_limits<T>::lowest());
-    }
-    else { //string key
-      std::fill(kEndSentinel_arr, kEndSentinel_arr + max_key_length,
-          STR_VAL_MAX);
-      std::fill(the_max_key_arr_, the_max_key_arr_ + max_key_length,
-          STR_VAL_MAX);
-      the_min_key_arr_[0] = STR_VAL_MIN;
-      std::fill(the_min_key_arr_ + 1, the_min_key_arr_ + max_key_length, 0);
-    }
+    
+    std::fill(kEndSentinel_arr, kEndSentinel_arr + max_key_length,
+        STR_VAL_MAX);
+    std::fill(the_max_key_arr_, the_max_key_arr_ + max_key_length,
+        STR_VAL_MAX);
+    the_min_key_arr_[0] = STR_VAL_MIN;
+    std::fill(the_min_key_arr_ + 1, the_min_key_arr_ + max_key_length, 0);
+    
   }
 
   AlexDataNode(short level, int max_data_node_slots,
@@ -535,22 +519,13 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     the_max_key_arr_ = new T[max_key_length];
     the_min_key_arr_ = new T[max_key_length];
 
-    if (typeid(T) != typeid(char)) { //numeric key
-      std::fill(kEndSentinel_arr, kEndSentinel_arr + max_key_length,
-          std::numeric_limits<T>::max());
-      std::fill(the_max_key_arr_, the_max_key_arr_ + max_key_length,
-          std::numeric_limits<T>::max());
-      std::fill(the_min_key_arr_, the_min_key_arr_ + max_key_length,
-          std::numeric_limits<T>::lowest());
-    }
-    else { //string key
-      std::fill(kEndSentinel_arr, kEndSentinel_arr + max_key_length,
-          STR_VAL_MAX);
-      std::fill(the_max_key_arr_, the_max_key_arr_ + max_key_length,
-          STR_VAL_MAX);
-      the_min_key_arr_[0] = STR_VAL_MIN;
-      std::fill(the_min_key_arr_ + 1, the_min_key_arr_ + max_key_length, 0);
-    }
+    std::fill(kEndSentinel_arr, kEndSentinel_arr + max_key_length,
+        STR_VAL_MAX);
+    std::fill(the_max_key_arr_, the_max_key_arr_ + max_key_length,
+        STR_VAL_MAX);
+    the_min_key_arr_[0] = STR_VAL_MIN;
+    std::fill(the_min_key_arr_ + 1, the_min_key_arr_ + max_key_length, 0);
+    
   }
 
   ~AlexDataNode() {
@@ -570,6 +545,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     delete this->max_key_.val_;
     delete[] the_max_key_arr_;
     delete[] the_min_key_arr_;
+    pthread_rwlock_destroy(&key_array_rw_lock);
   }
 
   AlexDataNode(self_type& other)
@@ -2053,7 +2029,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 #endif
 
     // Retrain model if the number of keys is sufficiently small (under 50)
-    key_array_rw_lock.write_wait(); //since it's now altering data node model
+    pthread_rwlock_wrlock(&key_array_rw_lock); //since it's now altering data node model
     if (num_keys_ < 50 || force_retrain) {
       const_iterator_type it(this, 0);
       LinearModelBuilder<T> builder(&(this->model_));
@@ -2077,7 +2053,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
                             data_capacity_);
       }
     }
-    key_array_rw_lock.write_finished();
+    pthread_rwlock_unlock(&key_array_rw_lock);
 
     int last_position = -1;
     int keys_remaining = num_keys_;
@@ -2139,7 +2115,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 #endif
     }
 
-    key_array_rw_lock.write_wait(); //since it's now altering data node itself.
+    pthread_rwlock_wrlock(&key_array_rw_lock); //since it's now altering data node itself.
 #if ALEX_DATA_NODE_SEP_ARRAYS
     delete[] key_slots_;
     payload_allocator().deallocate(payload_slots_, data_capacity_);
@@ -2163,7 +2139,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
                           static_cast<double>(num_keys_ + 1)),
                  static_cast<double>(data_capacity_));
     contraction_threshold_ = data_capacity_ * kMinDensity_;
-    key_array_rw_lock.write_finished();
+    pthread_rwlock_unlock(&key_array_rw_lock);
 
     auto resize_end_time = std::chrono::high_resolution_clock::now();
     auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(resize_end_time - resize_start_time).count();
@@ -2193,7 +2169,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     auto insert_element_at_start_time = std::chrono::high_resolution_clock::now();
     if (mode == 1) {
       profileStats.insert_element_at_call_cnt[worker_id]++;
-      key_array_rw_lock.write_wait(); //synchronization
+      pthread_rwlock_wrlock(&key_array_rw_lock); //synchronization
     }
 #if ALEX_DATA_NODE_SEP_ARRAYS
     key_slots_[pos] = key;
@@ -2210,7 +2186,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       pos--;
     }
     if (mode == 1) {
-      key_array_rw_lock.write_finished();
+      pthread_rwlock_unlock(&key_array_rw_lock);
       auto insert_element_at_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_element_at_end_time - insert_element_at_start_time).count();
       profileStats.insert_element_at_time[worker_id] += elapsed_time;
@@ -2231,7 +2207,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     int gap_pos = closest_gap(pos);
     //std::cout << "gap pos is " << gap_pos << std::endl;
     set_bit(gap_pos);
-    key_array_rw_lock.write_wait(); //for synchronization.
+    pthread_rwlock_wrlock(&key_array_rw_lock); //for synchronization.
     if (gap_pos >= pos) {
       for (int i = gap_pos; i > pos; i--) {
 #if ALEX_DATA_NODE_SEP_ARRAYS
@@ -2242,8 +2218,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 #endif
       }
       insert_element_at(key, payload, pos, worker_id);
+      pthread_rwlock_unlock(&key_array_rw_lock);
       num_shifts_ += gap_pos - pos;
-      key_array_rw_lock.write_finished();
       auto insert_using_shifts_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_using_shifts_end_time - insert_using_shifts_start_time).count();
       //should decrement insert_elemnt_at cnt + should not update insert_element_at time?
@@ -2263,8 +2239,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 #endif
       }
       insert_element_at(key, payload, pos - 1, worker_id);
+      pthread_rwlock_unlock(&key_array_rw_lock);
       num_shifts_ += pos - gap_pos - 1;
-      key_array_rw_lock.write_finished();
       auto insert_using_shifts_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_using_shifts_end_time - insert_using_shifts_start_time).count();
       //should decrement insert_elemnt_at cnt + should not update insert_element_at time?

@@ -1742,25 +1742,28 @@ public:
   std::pair<bool, P> get_payload(const AlexKey<T>& key, int32_t worker_id) {
     profileStats.get_payload_call_cnt[worker_id]++;
     auto get_payload_start_time = std::chrono::high_resolution_clock::now();
+READ_RETRY:
     data_node_type* leaf = get_leaf(key, worker_id, 0);
     if (leaf == nullptr) {
       rcu_progress(worker_id);
       return {false, 0};
     }
 
-    //wait until all writes are finished and mark it.
-    while (true) {
-      if (leaf->key_array_rw_lock.increment_rd()) {break;}
+    //try reading. If failed, retry later
+    if (pthread_rwlock_tryrdlock(&(leaf->key_array_rw_lock))) {
+      //MAY NEED TO EDIT THIS PART
+      //IF IT DOESN'T WORK WELL, MODIFY IT TO RETRY LATER
+      goto READ_RETRY;
     }
     int idx = leaf->find_key(key, worker_id);
     
     if (idx < 0) {
-      leaf->key_array_rw_lock.decrement_rd();
+      pthread_rwlock_unlock(&(leaf->key_array_rw_lock));
       rcu_progress(worker_id);
       return {false, 0};
     } else {
       P rval = leaf->get_payload(idx);
-      leaf->key_array_rw_lock.decrement_rd();
+      pthread_rwlock_unlock(&(leaf->key_array_rw_lock));
       rcu_progress(worker_id);
       auto get_payload_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(get_payload_end_time - get_payload_start_time).count();
