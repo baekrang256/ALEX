@@ -1320,10 +1320,10 @@ struct ProfileStats {
               << "find_key_call_cnt_total : " << find_key_call_cnt_total << "\n\n";
 
     std::cout << "-average time-\n"
-              << "insert_from_superroot_success_time : " << get_payload_from_superroot_success_time_cumu / td_num << '\n'
-              << "insert_from_parent_success_time : " << get_payload_from_parent_success_time_cumu / td_num << '\n'
-              << "insert_from_superroot_fail_time : " << get_payload_from_superroot_fail_time_cumu / td_num << '\n'
-              << "insert_from_parent_fail_time : " << get_payload_from_parent_fail_time_cumu / td_num << '\n'
+              << "get_payload_from_superroot_success_time : " << get_payload_from_superroot_success_time_cumu / td_num << '\n'
+              << "get_payload_from_parent_success_time : " << get_payload_from_parent_success_time_cumu / td_num << '\n'
+              << "get_payload_from_superroot_fail_time : " << get_payload_from_superroot_fail_time_cumu / td_num << '\n'
+              << "get_payload_from_parent_fail_time : " << get_payload_from_parent_fail_time_cumu / td_num << '\n'
               << "insert_from_superroot_success_time : " << insert_from_superroot_success_time_cumu / td_num << '\n'
               << "insert_from_parent_success_time : " << insert_from_parent_success_time_cumu / td_num << '\n'
               << "insert_from_superroot_fail_time : " << insert_from_superroot_fail_time_cumu / td_num << '\n'
