@@ -1332,7 +1332,7 @@ struct ProfileStats {
               << "get_leaf_from_get_payload_directp_time_cumu : " << get_leaf_from_insert_directp_time_cumu / td_num  << '\n'
               << "get_leaf_from_insert_superroot_time : " << get_leaf_from_insert_superroot_time_cumu / td_num  << '\n'
               << "get_leaf_from_insert_directp_time : " << get_leaf_from_insert_directp_time_cumu / td_num  << '\n'
-              << "find_key_time" << find_key_time_cumu / td_num << '\n'
+              << "find_key_time : " << find_key_time_cumu / td_num << '\n'
               << "insert_using_shifts_time : " << insert_using_shifts_time_cumu / td_num << '\n'
               << "insert_element_at_time : " << insert_element_at_time_cumu / td_num  << "\n\n";
 
