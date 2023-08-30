@@ -1328,8 +1328,8 @@ struct ProfileStats {
               << "insert_from_parent_success_time : " << insert_from_parent_success_time_cumu / td_num << '\n'
               << "insert_from_superroot_fail_time : " << insert_from_superroot_fail_time_cumu / td_num << '\n'
               << "insert_from_parent_fail_time : " << insert_from_parent_fail_time_cumu / td_num << '\n'
-              << "get_leaf_from_get_payload_superroot_time_cumu : " << get_leaf_from_insert_superroot_time_cumu / td_num  << '\n'
-              << "get_leaf_from_get_payload_directp_time_cumu : " << get_leaf_from_insert_directp_time_cumu / td_num  << '\n'
+              << "get_leaf_from_get_payload_superroot_time : " << get_leaf_from_get_payload_superroot_time_cumu / td_num  << '\n'
+              << "get_leaf_from_get_payload_directp_time : " << get_leaf_from_get_payload_directp_time_cumu / td_num  << '\n'
               << "get_leaf_from_insert_superroot_time : " << get_leaf_from_insert_superroot_time_cumu / td_num  << '\n'
               << "get_leaf_from_insert_directp_time : " << get_leaf_from_insert_directp_time_cumu / td_num  << '\n'
               << "find_key_time : " << find_key_time_cumu / td_num << '\n'
@@ -1338,10 +1338,10 @@ struct ProfileStats {
 
 
     std::cout << "-max time-\n"
-              << "max_get_payload_from_superroot_success_time_cumu : " << max_get_payload_from_superroot_success_time_cumu << '\n'
-              << "max_get_payload_from_parent_success_time_cumu : " << max_get_payload_from_parent_success_time_cumu << '\n'
-              << "max_get_payload_from_superroot_fail_time_cumu : " << max_get_payload_from_superroot_fail_time_cumu << '\n'
-              << "max_get_payload_from_parent_fail_time_cumu : " << max_get_payload_from_parent_fail_time_cumu << '\n'
+              << "max_get_payload_from_superroot_success_time : " << max_get_payload_from_superroot_success_time_cumu << '\n'
+              << "max_get_payload_from_parent_success_time : " << max_get_payload_from_parent_success_time_cumu << '\n'
+              << "max_get_payload_from_superroot_fail_time : " << max_get_payload_from_superroot_fail_time_cumu << '\n'
+              << "max_get_payload_from_parent_fail_time : " << max_get_payload_from_parent_fail_time_cumu << '\n'
               << "max_insert_from_superroot_success_time : " << max_insert_from_superroot_success_time_cumu << '\n'
               << "max_insert_from_parent_success_time : " << max_insert_from_parent_success_time_cumu << '\n'
               << "max_insert_from_superroot_fail_time : " << max_insert_from_superroot_fail_time_cumu << '\n'
@@ -1356,10 +1356,10 @@ struct ProfileStats {
 
 
     std::cout << "-min time-\n"
-              << "min_get_payload_from_superroot_success_time_cumu : " << min_get_payload_from_superroot_success_time_cumu << '\n'
-              << "min_get_payload_from_parent_success_time_cumu : " << min_get_payload_from_parent_success_time_cumu << '\n'
-              << "min_get_payload_from_superroot_fail_time_cumu : " << min_get_payload_from_superroot_fail_time_cumu << '\n'
-              << "min_get_payload_from_parent_fail_time_cumu : " << min_get_payload_from_parent_fail_time_cumu << '\n'
+              << "min_get_payload_from_superroot_success_time : " << min_get_payload_from_superroot_success_time_cumu << '\n'
+              << "min_get_payload_from_parent_success_time : " << min_get_payload_from_parent_success_time_cumu << '\n'
+              << "min_get_payload_from_superroot_fail_time : " << min_get_payload_from_superroot_fail_time_cumu << '\n'
+              << "min_get_payload_from_parent_fail_time : " << min_get_payload_from_parent_fail_time_cumu << '\n'
               << "min_insert_from_superroot_success_time : " << min_insert_from_superroot_success_time_cumu << '\n'
               << "min_insert_from_parent_success_time : " << min_insert_from_parent_success_time_cumu << '\n'
               << "min_insert_from_superroot_fail_time : " << min_insert_from_superroot_fail_time_cumu << '\n'
