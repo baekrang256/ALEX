@@ -1780,8 +1780,6 @@ public:
 
     //try reading. If failed, retry later
     if (pthread_rwlock_tryrdlock(&(leaf->key_array_rw_lock))) {
-      //MAY NEED TO EDIT THIS PART
-      //IF IT DOESN'T WORK WELL, MODIFY IT TO RETRY LATER
       auto parent = leaf->parent_;
       rcu_progress(worker_id);
 #if PROFILE
