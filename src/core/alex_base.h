@@ -203,7 +203,7 @@ class LinearModel {
     b_ *= expansion_factor;
   }
 
-  inline int predict(AlexKey<T> key) const {
+  inline int predict(const AlexKey<T> &key) const {
     assert(a_ != nullptr);
     assert (max_key_length_ == key.max_key_length_);
     double result = 0.0;
@@ -213,7 +213,7 @@ class LinearModel {
     return static_cast<int>(result + b_);
   }
 
-  inline double predict_double(AlexKey<T> key) const {
+  inline double predict_double(const AlexKey<T> &key) const {
     assert(a_ != nullptr);
     assert (max_key_length_ == key.max_key_length_);
     double result = 0.0;
