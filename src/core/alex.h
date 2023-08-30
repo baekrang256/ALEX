@@ -463,18 +463,24 @@ class Alex {
   forceinline data_node_type* get_leaf_from_parent(
       AlexKey<T> key, const uint32_t worker_id, node_type *starting_parent,
       int mode = 1, std::vector<TraversalNode<T, P>>* traversal_path = nullptr) {
-    
+#if PROFILE
     auto get_leaf_from_parent_start_time = std::chrono::high_resolution_clock::now();
+#endif
     node_type* cur = starting_parent == superroot_ ? root_node_ : starting_parent;
-    if (mode == 0) {
-      profileStats.get_leaf_from_get_payload_call_cnt[worker_id]++;
+#if PROFILE
+    if (mode == 0 && starting_parent == superroot_) {
+      profileStats.get_leaf_from_get_payload_superroot_call_cnt[worker_id]++;
     }
-    else if (starting_parent == superroot_) {
+    else if (mode == 0 && starting_parent != superroot_) {
+      profileStats.get_leaf_from_get_payload_directp_call_cnt[worker_id]++;
+    }
+    else if (mode == 1 && starting_parent == superroot_) {
       profileStats.get_leaf_from_insert_superroot_call_cnt[worker_id]++;
     }
     else {
       profileStats.get_leaf_from_insert_directp_call_cnt[worker_id]++;
     }
+#endif
 
     if (cur->is_leaf_) {
       //normally shouldn't happen, since normally starting node is always model node.
@@ -1034,14 +1040,22 @@ EmptyNodeStart:
         // we don't do rcu_progress here, since we are entering data node.
         // rcu_progress should be called at adequate point where the users finished using this data node.
         // If done ignorantly, it could cause null pointer access (because of destruction by other thread)
+#if PROFILE
         auto get_leaf_from_parent_end_time = std::chrono::high_resolution_clock::now();
         auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(get_leaf_from_parent_end_time - get_leaf_from_parent_start_time).count();
-        if (mode == 0) {
-          profileStats.get_leaf_from_get_payload_time[worker_id] += elapsed_time;
-          profileStats.max_get_leaf_from_get_payload_time[worker_id] =
-            std::max(profileStats.max_get_leaf_from_get_payload_time[worker_id], elapsed_time);
-          profileStats.min_get_leaf_from_get_payload_time[worker_id] =
-            std::min(profileStats.min_get_leaf_from_get_payload_time[worker_id], elapsed_time);
+        if (mode == 0 && starting_parent == superroot_) {
+          profileStats.get_leaf_from_get_payload_superroot_time[worker_id] += elapsed_time;
+          profileStats.max_get_leaf_from_get_payload_superroot_time[worker_id] =
+            std::max(profileStats.max_get_leaf_from_get_payload_superroot_time[worker_id], elapsed_time);
+          profileStats.min_get_leaf_from_get_payload_superroot_time[worker_id] =
+            std::min(profileStats.max_get_leaf_from_get_payload_superroot_time[worker_id], elapsed_time);
+        }
+        else if (mode == 0 && starting_parent != superroot_) {
+          profileStats.get_leaf_from_get_payload_directp_time[worker_id] += elapsed_time;
+          profileStats.max_get_leaf_from_get_payload_directp_time[worker_id] =
+            std::max(profileStats.max_get_leaf_from_get_payload_directp_time[worker_id], elapsed_time);
+          profileStats.min_get_leaf_from_get_payload_directp_time[worker_id] =
+            std::min(profileStats.min_get_leaf_from_get_payload_directp_time[worker_id], elapsed_time);
         }
         else if (starting_parent == superroot_) {
           profileStats.get_leaf_from_insert_superroot_time[worker_id] += elapsed_time;
@@ -1057,6 +1071,7 @@ EmptyNodeStart:
           profileStats.min_get_leaf_from_insert_directp_time[worker_id] =
             std::min(profileStats.min_get_leaf_from_insert_directp_time[worker_id], elapsed_time);
         }
+#endif
         return (data_node_type *) cur;
       }
       //entering model node, need to progress
@@ -1739,40 +1754,90 @@ EmptyNodeStart:
   // Returns whether payload search was successful, and the payload itself if it was successful.
   // This avoids the overhead of creating an iterator
 public:
-  std::pair<bool, P> get_payload(const AlexKey<T>& key, int32_t worker_id) {
-    profileStats.get_payload_call_cnt[worker_id]++;
-    auto get_payload_start_time = std::chrono::high_resolution_clock::now();
-READ_RETRY:
-    data_node_type* leaf = get_leaf(key, worker_id, 0);
+  std::tuple<int, P, model_node_type *> get_payload(const AlexKey<T>& key, int32_t worker_id) {
+    return get_payload_from_parent(key, superroot_, worker_id);
+  }
+
+  //first element returns...
+  //0 on success.
+  //1 if failed because write is writing
+  //2 if failed because not foundable
+  std::tuple<int, P, model_node_type *> get_payload_from_parent(const AlexKey<T>& key, model_node_type *last_parent, int32_t worker_id) {
+#if PROFILE
+    if (last_parent == superroot_) {
+      profileStats.get_payload_superroot_call_cnt[worker_id]++;
+    }
+    else {
+      profileStats.get_payload_directp_call_cnt[worker_id]++;
+    }
+    auto get_payload_from_parent_start_time = std::chrono::high_resolution_clock::now();
+#endif
+    data_node_type* leaf = get_leaf_from_parent(key, worker_id, last_parent, 0);
     if (leaf == nullptr) {
       rcu_progress(worker_id);
-      return {false, 0};
+      return {2, 0, nullptr};
     }
 
     //try reading. If failed, retry later
     if (pthread_rwlock_tryrdlock(&(leaf->key_array_rw_lock))) {
       //MAY NEED TO EDIT THIS PART
       //IF IT DOESN'T WORK WELL, MODIFY IT TO RETRY LATER
-      goto READ_RETRY;
+      auto parent = leaf->parent_;
+      rcu_progress(worker_id);
+#if PROFILE
+      auto get_payload_from_parent_end_time = std::chrono::high_resolution_clock::now();
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(get_payload_from_parent_end_time - get_payload_from_parent_start_time).count();
+      if (last_parent == superroot_) {
+        profileStats.get_payload_from_superroot_fail_time[worker_id] += elapsed_time;
+        profileStats.get_payload_superroot_fail_cnt[worker_id]++;
+        profileStats.max_get_payload_from_superroot_fail_time[worker_id] =
+          std::max(profileStats.max_get_payload_from_superroot_fail_time[worker_id], elapsed_time);
+        profileStats.min_get_payload_from_superroot_fail_time[worker_id] =
+          std::min(profileStats.min_get_payload_from_superroot_fail_time[worker_id], elapsed_time);
+      }
+      else {
+        profileStats.get_payload_from_parent_fail_time[worker_id] += elapsed_time;
+        profileStats.get_payload_directp_fail_cnt[worker_id]++;
+        profileStats.max_get_payload_from_parent_fail_time[worker_id] =
+          std::max(profileStats.max_get_payload_from_parent_fail_time[worker_id], elapsed_time);
+        profileStats.min_get_payload_from_parent_fail_time[worker_id] =
+          std::min(profileStats.min_get_payload_from_parent_fail_time[worker_id], elapsed_time);
+      }
+#endif
+      return {1, 0, parent};
     }
     int idx = leaf->find_key(key, worker_id);
     
     if (idx < 0) {
       pthread_rwlock_unlock(&(leaf->key_array_rw_lock));
+      auto last_parent = leaf->parent_;
       rcu_progress(worker_id);
-      return {false, 0};
+      return {1, 0, last_parent};
     } else {
       P rval = leaf->get_payload(idx);
       pthread_rwlock_unlock(&(leaf->key_array_rw_lock));
       rcu_progress(worker_id);
-      auto get_payload_end_time = std::chrono::high_resolution_clock::now();
-      auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(get_payload_end_time - get_payload_start_time).count();
-      profileStats.get_payload_time[worker_id] += elapsed_time;
-      profileStats.max_get_payload_time[worker_id] =
-        std::max(profileStats.max_get_payload_time[worker_id], elapsed_time);
-      profileStats.min_get_payload_time[worker_id] =
-        std::min(profileStats.min_get_payload_time[worker_id], elapsed_time);
-      return {true, rval};
+#if PROFILE
+      auto get_payload_from_parent_end_time = std::chrono::high_resolution_clock::now();
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(get_payload_from_parent_end_time - get_payload_from_parent_start_time).count();
+      if (last_parent == superroot_) {
+        profileStats.get_payload_from_superroot_success_time[worker_id] += elapsed_time;
+        profileStats.get_payload_superroot_success_cnt[worker_id]++;
+        profileStats.max_get_payload_from_superroot_success_time[worker_id] =
+          std::max(profileStats.max_get_payload_from_superroot_success_time[worker_id], elapsed_time);
+        profileStats.min_get_payload_from_superroot_success_time[worker_id] =
+          std::min(profileStats.min_get_payload_from_superroot_success_time[worker_id], elapsed_time);
+      }
+      else {
+        profileStats.get_payload_from_parent_success_time[worker_id] += elapsed_time;
+        profileStats.get_payload_directp_success_cnt[worker_id]++;
+        profileStats.max_get_payload_from_parent_success_time[worker_id] =
+          std::max(profileStats.max_get_payload_from_parent_success_time[worker_id], elapsed_time);
+        profileStats.min_get_payload_from_parent_success_time[worker_id] =
+          std::min(profileStats.min_get_payload_from_parent_success_time[worker_id], elapsed_time);
+      }
+#endif
+      return {0, rval, nullptr};
     }
   }
 
@@ -1900,6 +1965,7 @@ READ_RETRY:
   std::tuple<Iterator, bool, model_node_type *> insert_from_parent(const AlexKey<T>& key, const P& payload, 
                                                model_node_type *last_parent, uint32_t worker_id) {
     // in string ALEX, keys should not fall outside the key domain
+#if PROFILE
     if (last_parent == superroot_) {
       profileStats.insert_superroot_call_cnt[worker_id]++;
     }
@@ -1907,6 +1973,7 @@ READ_RETRY:
       profileStats.insert_directp_call_cnt[worker_id]++;
     }
     auto insert_from_parent_start_time = std::chrono::high_resolution_clock::now();
+#endif
     char larger_key = 0;
     char smaller_key = 0;
     for (unsigned int i = 0; i < key.max_key_length_; i++) {
@@ -1942,6 +2009,7 @@ READ_RETRY:
       leaf->unused.unlock();
       memory_fence();
       rcu_progress(worker_id);
+#if PROFILE
       auto insert_from_parent_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_from_parent_end_time - insert_from_parent_start_time).count();
       if (last_parent == superroot_) {
@@ -1960,6 +2028,7 @@ READ_RETRY:
         profileStats.min_insert_from_parent_fail_time[worker_id] =
           std::min(profileStats.min_insert_from_parent_fail_time[worker_id], elapsed_time);
       }
+#endif
       return {Iterator(nullptr, 1), false, parent};
     }
 
@@ -1989,6 +2058,7 @@ READ_RETRY:
       memory_fence();
       num_keys.increment();
       rcu_progress(worker_id);
+#if PROFILE
       auto insert_from_parent_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_from_parent_end_time - insert_from_parent_start_time).count();
       if (last_parent == superroot_) {
@@ -2007,7 +2077,7 @@ READ_RETRY:
         profileStats.min_insert_from_parent_success_time[worker_id] =
           std::min(profileStats.min_insert_from_parent_success_time[worker_id], elapsed_time);
       }
-
+#endif
       return {Iterator(leaf, insert_pos), true, nullptr}; //iterator could be invalid.
     }
     else {
@@ -2043,6 +2113,7 @@ READ_RETRY:
       //original thread returns and retry later. (need to rcu_progress)
       rcu_progress(worker_id);
 
+#if PROFILE
       auto insert_from_parent_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_from_parent_end_time - insert_from_parent_start_time).count();
 
@@ -2062,6 +2133,7 @@ READ_RETRY:
         profileStats.min_insert_from_parent_fail_time[worker_id] =
           std::min(profileStats.min_insert_from_parent_fail_time[worker_id], elapsed_time);
       }
+#endif
 
       return {Iterator(nullptr, 1), false, parent};
     }
@@ -2249,8 +2321,10 @@ READ_RETRY:
       model_node_type* parent, int bucketID, int fanout_tree_depth,
       std::vector<fanout_tree::FTNode>& used_fanout_tree_nodes,
       bool reuse_model, uint32_t worker_id, self_type *this_ptr) {
+#if PROFILE
     profileStats.split_downwards_call_cnt++;
     auto split_downwards_start_time = std::chrono::high_resolution_clock::now();
+#endif
 #if DEBUG_PRINT
     alex::coutLock.lock();
     std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
@@ -2374,7 +2448,7 @@ READ_RETRY:
     this_ptr->delete_node(leaf);
     delete parent_old_children;
     delete switched_children;
-
+#if PROFILE
     auto split_downwards_end_time = std::chrono::high_resolution_clock::now();
     auto elapsed_time = std::chrono::duration_cast<std::chrono::bgTimeUnit>(split_downwards_end_time - split_downwards_start_time).count();
     profileStats.split_downwards_time += elapsed_time;
@@ -2382,6 +2456,7 @@ READ_RETRY:
       std::max(profileStats.max_split_downwards_time.load(), elapsed_time);
     profileStats.min_split_downwards_time =
       std::min(profileStats.min_split_downwards_time.load(), elapsed_time);
+#endif
   }
 
   // Splits data node sideways in the manner determined by the fanout tree.
@@ -2390,8 +2465,10 @@ READ_RETRY:
                       int fanout_tree_depth,
                       std::vector<fanout_tree::FTNode>& used_fanout_tree_nodes,
                       bool reuse_model, uint32_t worker_id, self_type *this_ptr) {
+#if PROFILE
     profileStats.split_sideways_call_cnt++;
     auto split_sideways_start_time = std::chrono::high_resolution_clock::now();
+#endif
     auto leaf = static_cast<data_node_type*>((parent->children_.read())[bucketID].node_ptr_);
 
     int fanout = 1 << fanout_tree_depth;
@@ -2426,7 +2503,7 @@ READ_RETRY:
     rcu_barrier();
     this_ptr->delete_node(leaf);
     delete parent_old_children;
-
+#if PROFILE
     auto split_sideways_end_time = std::chrono::high_resolution_clock::now();
     auto elapsed_time = std::chrono::duration_cast<std::chrono::bgTimeUnit>(split_sideways_end_time - split_sideways_start_time).count();
     profileStats.split_sideways_time += elapsed_time;
@@ -2434,6 +2511,7 @@ READ_RETRY:
       std::max(profileStats.max_split_sideways_time.load(), elapsed_time);
     profileStats.min_split_sideways_time =
       std::min(profileStats.min_split_sideways_time.load(), elapsed_time);
+#endif
   }
 
   // Create two new data nodes by equally dividing the key space of the old data

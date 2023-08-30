@@ -1704,7 +1704,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // If no positions equal to key, returns -1
   int find_key(const AlexKey<T>& key, uint32_t worker_id) {
     //start searching when no write is running.
+#if PROFILE
     auto find_key_start_time = std::chrono::high_resolution_clock::now();
+    profileStats.find_key_call_cnt[worker_id]++;
+#endif
 
     num_lookups_++;
     int predicted_pos = predict_position(key);
@@ -1715,6 +1718,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     if (pos < 0 || !key_equal(ALEX_DATA_NODE_KEY_AT(pos), key)) {
       return -1;
     } else {
+#if PROFILE
       auto find_key_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(find_key_end_time - find_key_start_time).count();
       profileStats.find_key_time[worker_id] += elapsed_time;
@@ -1722,6 +1726,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         std::max(profileStats.max_find_key_time[worker_id], elapsed_time);
       profileStats.min_find_key_time[worker_id] =
         std::min(profileStats.min_find_key_time[worker_id], elapsed_time);
+#endif
 
       return pos;
     }
@@ -2004,9 +2009,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // For multithreading : makes new node with resized data node.
   void resize(double target_density, bool force_retrain = false,
               bool keep_left = false, bool keep_right = false) {
-
+#if PROFILE
     profileStats.resize_call_cnt++;
     auto resize_start_time = std::chrono::high_resolution_clock::now();
+#endif
 
     if (num_keys_ == 0) {
       return;
@@ -2141,6 +2147,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     contraction_threshold_ = data_capacity_ * kMinDensity_;
     pthread_rwlock_unlock(&key_array_rw_lock);
 
+#if PROFILE
     auto resize_end_time = std::chrono::high_resolution_clock::now();
     auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(resize_end_time - resize_start_time).count();
     profileStats.resize_time += elapsed_time;
@@ -2148,6 +2155,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       std::max(profileStats.max_resize_time.load(), elapsed_time);
     profileStats.min_resize_time =
       std::min(profileStats.min_resize_time.load(), elapsed_time);
+#endif
   }
 
   inline bool is_append_mostly_right() const {
@@ -2166,9 +2174,13 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // mode 1 : rw_lock not obtained, need to do write wait (for other use cases)
   void insert_element_at(const AlexKey<T>& key, P payload, int pos, 
                          uint32_t worker_id, int mode = 0) {
+#if PROFILE
     auto insert_element_at_start_time = std::chrono::high_resolution_clock::now();
+#endif
     if (mode == 1) {
+#if PROFILE
       profileStats.insert_element_at_call_cnt[worker_id]++;
+#endif
       pthread_rwlock_wrlock(&key_array_rw_lock); //synchronization
     }
 #if ALEX_DATA_NODE_SEP_ARRAYS
@@ -2187,6 +2199,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     }
     if (mode == 1) {
       pthread_rwlock_unlock(&key_array_rw_lock);
+#if PROFILE
       auto insert_element_at_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_element_at_end_time - insert_element_at_start_time).count();
       profileStats.insert_element_at_time[worker_id] += elapsed_time;
@@ -2194,7 +2207,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         std::max(profileStats.max_insert_element_at_time[worker_id], elapsed_time);
       profileStats.min_insert_element_at_time[worker_id] =
         std::min(profileStats.min_insert_element_at_time[worker_id], elapsed_time);
-  
+#endif
     }
   }
 
@@ -2202,8 +2215,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // Returns the actual position of insertion
   int insert_using_shifts(const AlexKey<T>& key, P payload, int pos, uint32_t worker_id) {
     // Find the closest gap
+#if PROFILE
     profileStats.insert_using_shifts_call_cnt[worker_id]++;
     auto insert_using_shifts_start_time = std::chrono::high_resolution_clock::now();
+#endif
     int gap_pos = closest_gap(pos);
     //std::cout << "gap pos is " << gap_pos << std::endl;
     set_bit(gap_pos);
@@ -2220,14 +2235,15 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       insert_element_at(key, payload, pos, worker_id);
       pthread_rwlock_unlock(&key_array_rw_lock);
       num_shifts_ += gap_pos - pos;
+#if PROFILE
       auto insert_using_shifts_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_using_shifts_end_time - insert_using_shifts_start_time).count();
-      //should decrement insert_elemnt_at cnt + should not update insert_element_at time?
       profileStats.insert_using_shifts_time[worker_id] += elapsed_time;
       profileStats.max_insert_using_shifts_time[worker_id] =
         std::max(profileStats.max_insert_using_shifts_time[worker_id], elapsed_time);
       profileStats.min_insert_using_shifts_time[worker_id] =
         std::min(profileStats.min_insert_using_shifts_time[worker_id], elapsed_time);
+#endif
       return pos;
     } else {
       for (int i = gap_pos; i < pos - 1; i++) {
@@ -2241,14 +2257,15 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       insert_element_at(key, payload, pos - 1, worker_id);
       pthread_rwlock_unlock(&key_array_rw_lock);
       num_shifts_ += pos - gap_pos - 1;
+#if PROFILE
       auto insert_using_shifts_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_using_shifts_end_time - insert_using_shifts_start_time).count();
-      //should decrement insert_elemnt_at cnt + should not update insert_element_at time?
       profileStats.insert_using_shifts_time[worker_id] += elapsed_time;
       profileStats.max_insert_using_shifts_time[worker_id] =
         std::max(profileStats.max_insert_using_shifts_time[worker_id], elapsed_time);
       profileStats.min_insert_using_shifts_time[worker_id] =
         std::min(profileStats.min_insert_using_shifts_time[worker_id], elapsed_time);
+#endif
       return pos - 1;
     }
   }

@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <string>
 #include <list>
+#include <limits>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -32,7 +33,6 @@ struct FGParam {
 //for multithreading synchronization
 std::atomic<bool> running(false);
 std::atomic<size_t> ready_threads(0);
-std::atomic<uint64_t> failed_cnt(0);
 
 //common read-only data used for each threads
 alex::AlexKey<KEY_TYPE> *keys = nullptr;
@@ -68,6 +68,7 @@ uint64_t num_actual_inserts_perth;
  * --print_key_stats        key related stat print
  * --strict_read            abort when failed finding payload
  * --strict_insert          abort when failed finding leaf node to insert key
+ * --do_profile             profile stats
  */
 int main(int argc, char* argv[]) {
   auto flags = parse_flags(argc, argv);
@@ -160,11 +161,15 @@ int main(int argc, char* argv[]) {
   std::cout << std::scientific;
   std::cout << std::setprecision(3);
   alex::rcu_alloc();
+#if PROFILE
   alex::profileStats.profileInit(td_num);
+#endif
 
   // Run workload
   while (true) {
+#if PROFILE
     alex::profileStats.profileReInit();
+#endif
     alex::rcu_init();
     batch_no++;
     std::cout << "batch starts with no : " << batch_no << std::endl;
@@ -176,7 +181,6 @@ int main(int argc, char* argv[]) {
     fg_param_t fg_params[td_num];
     running = false;
     ready_threads.store(0);
-    failed_cnt = 0;
 
     num_actual_lookups_perth = num_lookups_per_batch / td_num;
     num_actual_inserts_perth = std::min(num_inserts_per_batch / td_num , (total_num_keys - inserted_range) / td_num);
@@ -226,11 +230,11 @@ int main(int argc, char* argv[]) {
                 << num_batch_operations / batch_time * 1e9 << " ops/sec"
                 << "\n\tcumulative throughput:\t"
                 << cumulative_operations / cumulative_time * 1e9 << " ops/sec"
-                << "\ninserted range is " << inserted_range 
-                << "\nfailed cnt is " << failed_cnt << std::endl;
+                << "\ninserted range is " << inserted_range << '\n' << std::endl;
     }
-    
+#if PROFILE
     alex::profileStats.printProfileStats();
+#endif
 
     // Check for workload end conditions
     if (insert_frac != 0 && inserted_range >= total_num_keys) {
@@ -254,7 +258,9 @@ int main(int argc, char* argv[]) {
 
   delete[] values;
   delete[] keys;
+#if PROFILE
   alex::profileStats.profileDelete();
+#endif
 }
 
 
@@ -285,9 +291,10 @@ void *run_fg(void *param) {
   std::mt19937 gen(rd());
   std::uniform_real_distribution<> ratio_dis(0, 1);
   uint64_t initial_insertion_index = insertion_index;
-  std::list<std::tuple<uint64_t, 
+  std::list<std::tuple<bool,
+                       uint64_t, 
                        PAYLOAD_TYPE, 
-                       alex::Alex<KEY_TYPE, PAYLOAD_TYPE>::model_node_type *>> pending_insert;
+                       alex::Alex<KEY_TYPE, PAYLOAD_TYPE>::model_node_type *>> pending_op;
   //alex::coutLock.lock();
   //std::cout << "worker " << thread_id << " ready to start" << std::endl;
   //alex::coutLock.unlock();
@@ -309,9 +316,7 @@ void *run_fg(void *param) {
       alex::coutLock.unlock();
 #endif
       PAYLOAD_TYPE val = static_cast<PAYLOAD_TYPE>(gen_payload());
-      std::tuple<alex::Alex<KEY_TYPE, PAYLOAD_TYPE>::Iterator, 
-                 bool, 
-                 alex::Alex<KEY_TYPE, PAYLOAD_TYPE>::model_node_type *> insert_result
+      auto insert_result
           = table->insert(keys[insertion_index], val, thread_id);
       if (!std::get<1>(insert_result)) {
         if (!std::get<0>(insert_result).cur_leaf_ && !std::get<0>(insert_result).cur_idx_) { 
@@ -333,17 +338,16 @@ void *run_fg(void *param) {
 #if DEBUG_PRINT
           alex::coutLock.lock();
           std::cout << "worker id : " << thread_id
-                    << " failed because node being modified. Should do other op" << std::endl;
+                    << " write failed because node being modified. Should do other op" << std::endl;
           alex::coutLock.unlock();
 #endif
-          pending_insert.push_back({insertion_index++, val, std::get<2>(insert_result)});
-          ++failed_cnt;
+          pending_op.push_back({true, insertion_index++, val, std::get<2>(insert_result)});
         }
         else {
           //failed because duplicates are not allowed.
           alex::coutLock.lock();
           std::cout << "worker id : " << thread_id
-                    << " failed because duplicate is not allowed. aborting" << std::endl;
+                    << " write failed because duplicate is not allowed. aborting" << std::endl;
           alex::coutLock.unlock();
           abort();
         }
@@ -376,31 +380,41 @@ void *run_fg(void *param) {
       std::cout << std::endl;
       alex::coutLock.unlock();
 #endif
-      std::pair<bool, PAYLOAD_TYPE> payload = table->get_payload(key, thread_id);
-      if (payload.first) {
+      auto read_result = table->get_payload(key, thread_id);
+      if (!std::get<0>(read_result)) {
         if (print_key_stats) {
           alex::coutLock.lock();
           std::cout << "t" << thread_id << " - ";
           for (unsigned int k = 0; k < max_key_length; k++) {
             std::cout << key.key_arr_[k];
           }
-          std::cout << " payload is : " << payload.second << std::endl;
+          std::cout << " payload is : " << std::get<1>(read_result) << std::endl;
           alex::coutLock.unlock();
         }
       }
       else {
         //NEED TO HANDLE READ FAILURE CASE
-        alex::coutLock.lock();
-        std::cout << "t" << thread_id << " - ";
-        std::cout << "failed finding payload." << std::endl;
-        if (strict_read) {
-          std::cout << "aborting" << std::endl;
+        if (std::get<0>(read_result) == 1) {
+#if DEBUG_PRINT
+          alex::coutLock.lock();
+          std::cout << "worker id : " << thread_id
+                    << " read failed because node being modified. Should do other op" << std::endl;
           alex::coutLock.unlock();
-          abort();
+#endif
+          pending_op.push_back({false, read_cnt, 0, std::get<2>(read_result)});
         }
-        alex::coutLock.unlock();
+        else {
+          alex::coutLock.lock();
+          std::cout << "t" << thread_id << " - ";
+          std::cout << "read failed finding payload." << std::endl;
+          if (strict_read) {
+            std::cout << "aborting" << std::endl;
+            alex::coutLock.unlock();
+            abort();
+          }
+          alex::coutLock.unlock();
+        }
       }
-      
       read_cnt++;
     }
   }
@@ -411,9 +425,9 @@ void *run_fg(void *param) {
   alex::coutLock.unlock();
 #endif
 
-  while (!pending_insert.empty()) {
-    auto op_param = pending_insert.front();
-    pending_insert.pop_front();
+  while (!pending_op.empty()) {
+    auto op_param = pending_op.front();
+    pending_op.pop_front();
 #if DEBUG_PRINT
     alex::coutLock.lock();
     std::cout << '\n';
@@ -421,56 +435,106 @@ void *run_fg(void *param) {
     std::cout << "worker id : " << thread_id << " re-inserting " << keys[std::get<0>(op_param)].key_arr_ << std::endl;
     alex::coutLock.unlock();
 #endif
-    std::tuple<alex::Alex<KEY_TYPE, PAYLOAD_TYPE>::Iterator, 
-               bool,
-               alex::Alex<KEY_TYPE, PAYLOAD_TYPE>::model_node_type *> insert_result
-          = table->insert_from_parent(keys[std::get<0>(op_param)], std::get<1>(op_param), std::get<2>(op_param), thread_id);
-    if (!std::get<1>(insert_result)) {
-      if (!std::get<0>(insert_result).cur_leaf_ && !std::get<0>(insert_result).cur_idx_) { 
-        //failed finding leaf
-        alex::coutLock.lock();
-          std::cout << "worker id : " << thread_id
-                    << " failed finding leaf to insert to." << std::endl;
-          if (strict_insert) {
-            std::cout << "aborting" << std::endl;
-            abort();
+    if (std::get<0>(op_param)) {//is insert
+      std::tuple<alex::Alex<KEY_TYPE, PAYLOAD_TYPE>::Iterator, 
+                bool,
+                alex::Alex<KEY_TYPE, PAYLOAD_TYPE>::model_node_type *> insert_result
+            = table->insert_from_parent(keys[std::get<1>(op_param)], std::get<2>(op_param), std::get<3>(op_param), thread_id);
+      if (!std::get<1>(insert_result)) {
+        if (!std::get<0>(insert_result).cur_leaf_ && !std::get<0>(insert_result).cur_idx_) { 
+          //failed finding leaf
+          alex::coutLock.lock();
+            std::cout << "worker id : " << thread_id
+                      << " failed finding leaf to insert to." << std::endl;
+            if (strict_insert) {
+              std::cout << "aborting" << std::endl;
+              abort();
+              alex::coutLock.unlock();
+            }
             alex::coutLock.unlock();
-          }
+        }
+        else if (!std::get<0>(insert_result).cur_leaf_) {
+          //failed because leaf is being modified/resizing.
+  #if DEBUG_PRINT
+          alex::coutLock.lock();
+          std::cout << "worker id : " << thread_id
+                    << " failed because node being modified. re-insertion post-poned" << std::endl;
           alex::coutLock.unlock();
+  #endif
+          pending_op.push_back(op_param);
+        }
+        else {
+          //failed because duplicates are not allowed.
+  #if DEBUG_PRINT
+          alex::coutLock.lock();
+          std::cout << "worker id : " << thread_id
+                    << " failed because duplicate is not allowed" << std::endl;
+          alex::coutLock.unlock();
+  #endif
+        }
       }
-      else if (!std::get<0>(insert_result).cur_leaf_) {
-        //failed because leaf is being modified/resizing.
-#if DEBUG_PRINT
-        alex::coutLock.lock();
-        std::cout << "worker id : " << thread_id
-                  << " failed because node being modified. re-insertion post-poned" << std::endl;
-        alex::coutLock.unlock();
-#endif
-        ++failed_cnt;
-        pending_insert.push_back(op_param);
-      }
-      else {
-        //failed because duplicates are not allowed.
-#if DEBUG_PRINT
-        alex::coutLock.lock();
-        std::cout << "worker id : " << thread_id
-                  << " failed because duplicate is not allowed" << std::endl;
-        alex::coutLock.unlock();
-#endif
+      else { //succeeded.
+        if (print_key_stats) {
+          alex::coutLock.lock();
+          std::cout << "t" << thread_id << " - ";
+          std::cout << "inserted key : ";
+          for (unsigned int j = 0; j < max_key_length; j++) {
+            std::cout << keys[std::get<1>(op_param)].key_arr_[j];
+          }
+          std::cout << std::endl;
+          alex::coutLock.unlock();
+        }
+        insert_cnt++;
       }
     }
-    else { //succeeded.
-      if (print_key_stats) {
-        alex::coutLock.lock();
-        std::cout << "t" << thread_id << " - ";
-        std::cout << "inserted key : ";
-        for (unsigned int j = 0; j < max_key_length; j++) {
-          std::cout << keys[std::get<0>(op_param)].key_arr_[j];
-        }
-        std::cout << std::endl;
-        alex::coutLock.unlock();
+    else {//is leaf
+      alex::AlexKey<KEY_TYPE> key = lookup_keys[std::get<1>(op_param)];
+#if DEBUG_PRINT
+      alex::coutLock.lock();
+      std::cout << '\n';
+      //std::cout << "current read_cnt is : " << read_cnt << std::endl;
+      std::cout << "worker id : " << thread_id << " reading lookup key ";
+      for (unsigned int k = 0; k < max_key_length; k++) {
+        std::cout << key.key_arr_[k];
       }
-      insert_cnt++;
+      std::cout << std::endl;
+      alex::coutLock.unlock();
+#endif
+      auto read_result = table->get_payload_from_parent(key, std::get<3>(op_param), thread_id);
+      if (!std::get<0>(read_result)) {
+        if (print_key_stats) {
+          alex::coutLock.lock();
+          std::cout << "t" << thread_id << " - ";
+          for (unsigned int k = 0; k < max_key_length; k++) {
+            std::cout << key.key_arr_[k];
+          }
+          std::cout << " payload is : " << std::get<1>(read_result) << std::endl;
+          alex::coutLock.unlock();
+        }
+      }
+      else {
+        //NEED TO HANDLE READ FAILURE CASE
+        if (std::get<0>(read_result) == 1) {
+#if DEBUG_PRINT
+          alex::coutLock.lock();
+          std::cout << "worker id : " << thread_id
+                    << " read failed because node being modified. Should do other op" << std::endl;
+          alex::coutLock.unlock();
+#endif
+          pending_op.push_back(op_param);
+        }
+        else {
+          alex::coutLock.lock();
+          std::cout << "t" << thread_id << " - ";
+          std::cout << "read failed finding payload." << std::endl;
+          if (strict_read) {
+            std::cout << "aborting" << std::endl;
+            alex::coutLock.unlock();
+            abort();
+          }
+          alex::coutLock.unlock();
+        }
+      }
     }
   }
 

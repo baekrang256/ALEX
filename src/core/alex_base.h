@@ -65,6 +65,9 @@ typedef unsigned __int32 uint32_t;
 /*** debug print ***/
 #define DEBUG_PRINT 0
 
+/*** profile ***/
+#define PROFILE 1
+
 /*** some utils for multithreading ***/
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
@@ -688,12 +691,24 @@ inline bool cpu_supports_bmi() {
 #define bgTimeUnit nanoseconds
 #define lkTimeUnit nanoseconds
 
+#if PROFILE
 struct ProfileStats {
   uint32_t td_num; //number of threads
 
   //time related
   //for foreground threads
-  fgStatType *get_payload_time, *max_get_payload_time, *min_get_payload_time;
+  fgStatType *get_payload_from_superroot_success_time,
+             *max_get_payload_from_superroot_success_time,
+             *min_get_payload_from_superroot_success_time;
+  fgStatType *get_payload_from_parent_success_time,
+             *max_get_payload_from_parent_success_time,
+             *min_get_payload_from_parent_success_time;
+  fgStatType *get_payload_from_superroot_fail_time,
+             *max_get_payload_from_superroot_fail_time,
+             *min_get_payload_from_superroot_fail_time;
+  fgStatType *get_payload_from_parent_fail_time,
+             *max_get_payload_from_parent_fail_time,
+             *min_get_payload_from_parent_fail_time;
   fgStatType *insert_from_superroot_success_time,
              *max_insert_from_superroot_success_time,
              *min_insert_from_superroot_success_time;
@@ -706,9 +721,12 @@ struct ProfileStats {
   fgStatType *insert_from_parent_fail_time,
              *max_insert_from_parent_fail_time,
              *min_insert_from_parent_fail_time;
-  fgStatType *get_leaf_from_get_payload_time,
-             *max_get_leaf_from_get_payload_time,
-             *min_get_leaf_from_get_payload_time;
+  fgStatType *get_leaf_from_get_payload_superroot_time,
+             *max_get_leaf_from_get_payload_superroot_time,
+             *min_get_leaf_from_get_payload_superroot_time;
+  fgStatType *get_leaf_from_get_payload_directp_time,
+             *max_get_leaf_from_get_payload_directp_time,
+             *min_get_leaf_from_get_payload_directp_time;
   fgStatType *get_leaf_from_insert_superroot_time,
              *max_get_leaf_from_insert_superroot_time,
              *min_get_leaf_from_insert_superroot_time;
@@ -745,18 +763,25 @@ struct ProfileStats {
 
   //count related
   //for foreground threads
-  uint64_t *get_payload_call_cnt;
+  uint64_t *get_payload_superroot_call_cnt;
+  uint64_t *get_payload_directp_call_cnt;
+  uint64_t *get_payload_superroot_success_cnt;
+  uint64_t *get_payload_directp_success_cnt;
+  uint64_t *get_payload_superroot_fail_cnt;
+  uint64_t *get_payload_directp_fail_cnt;
   uint64_t *insert_superroot_call_cnt;
   uint64_t *insert_directp_call_cnt;
   uint64_t *insert_superroot_success_cnt;
   uint64_t *insert_directp_success_cnt;
   uint64_t *insert_superroot_fail_cnt;
   uint64_t *insert_directp_fail_cnt;
-  uint64_t *get_leaf_from_get_payload_call_cnt;
+  uint64_t *get_leaf_from_get_payload_superroot_call_cnt;
+  uint64_t *get_leaf_from_get_payload_directp_call_cnt;
   uint64_t *get_leaf_from_insert_superroot_call_cnt;
   uint64_t *get_leaf_from_insert_directp_call_cnt;
   uint64_t *insert_using_shifts_call_cnt;
   uint64_t *insert_element_at_call_cnt;
+  uint64_t *find_key_call_cnt;
 
   //for background threads
   std::atomic<uint64_t> resize_call_cnt;
@@ -772,9 +797,18 @@ struct ProfileStats {
   //initializing profile structures
   void profileInit (uint32_t thread_num) {
     td_num = thread_num;
-    get_payload_time = new fgStatType[thread_num];
-    max_get_payload_time = new fgStatType[thread_num];
-    min_get_payload_time = new fgStatType[thread_num];
+    get_payload_from_superroot_success_time = new fgStatType[thread_num];
+    max_get_payload_from_superroot_success_time = new fgStatType[thread_num];
+    min_get_payload_from_superroot_success_time = new fgStatType[thread_num];
+    get_payload_from_parent_success_time = new fgStatType[thread_num];
+    max_get_payload_from_parent_success_time = new fgStatType[thread_num];
+    min_get_payload_from_parent_success_time = new fgStatType[thread_num];
+    get_payload_from_superroot_fail_time = new fgStatType[thread_num];
+    max_get_payload_from_superroot_fail_time = new fgStatType[thread_num];
+    min_get_payload_from_superroot_fail_time = new fgStatType[thread_num];
+    get_payload_from_parent_fail_time = new fgStatType[thread_num];
+    max_get_payload_from_parent_fail_time = new fgStatType[thread_num];
+    min_get_payload_from_parent_fail_time = new fgStatType[thread_num];
     insert_from_superroot_success_time = new fgStatType[thread_num];
     max_insert_from_superroot_success_time = new fgStatType[thread_num];
     min_insert_from_superroot_success_time = new fgStatType[thread_num];
@@ -787,9 +821,12 @@ struct ProfileStats {
     insert_from_parent_fail_time = new fgStatType[thread_num];
     max_insert_from_parent_fail_time = new fgStatType[thread_num];
     min_insert_from_parent_fail_time = new fgStatType[thread_num];
-    get_leaf_from_get_payload_time = new fgStatType[thread_num];
-    max_get_leaf_from_get_payload_time = new fgStatType[thread_num];
-    min_get_leaf_from_get_payload_time = new fgStatType[thread_num];
+    get_leaf_from_get_payload_superroot_time = new fgStatType[thread_num];
+    max_get_leaf_from_get_payload_superroot_time = new fgStatType[thread_num];
+    min_get_leaf_from_get_payload_superroot_time = new fgStatType[thread_num];
+    get_leaf_from_get_payload_directp_time = new fgStatType[thread_num];
+    max_get_leaf_from_get_payload_directp_time = new fgStatType[thread_num];
+    min_get_leaf_from_get_payload_directp_time = new fgStatType[thread_num];
     get_leaf_from_insert_superroot_time = new fgStatType[thread_num];
     max_get_leaf_from_insert_superroot_time = new fgStatType[thread_num];
     min_get_leaf_from_insert_superroot_time = new fgStatType[thread_num];
@@ -805,25 +842,44 @@ struct ProfileStats {
     insert_element_at_time = new fgStatType[thread_num];
     max_insert_element_at_time = new fgStatType[thread_num];
     min_insert_element_at_time = new fgStatType[thread_num];
-    get_payload_call_cnt = new uint64_t[thread_num];
+    get_payload_superroot_call_cnt = new uint64_t[thread_num];
+    get_payload_directp_call_cnt = new uint64_t[thread_num];
+    get_payload_superroot_success_cnt = new uint64_t[thread_num];
+    get_payload_directp_success_cnt = new uint64_t[thread_num];
+    get_payload_superroot_fail_cnt = new uint64_t[thread_num];
+    get_payload_directp_fail_cnt = new uint64_t[thread_num];
     insert_superroot_call_cnt = new uint64_t[thread_num];
     insert_directp_call_cnt = new uint64_t[thread_num];
     insert_superroot_success_cnt = new uint64_t[thread_num];
     insert_directp_success_cnt = new uint64_t[thread_num];
     insert_superroot_fail_cnt = new uint64_t[thread_num];
     insert_directp_fail_cnt = new uint64_t[thread_num];
-    get_leaf_from_get_payload_call_cnt = new uint64_t[thread_num];
+    get_leaf_from_get_payload_superroot_call_cnt = new uint64_t[thread_num];
+    get_leaf_from_get_payload_directp_call_cnt = new uint64_t[thread_num];
     get_leaf_from_insert_superroot_call_cnt = new uint64_t[thread_num];
     get_leaf_from_insert_directp_call_cnt = new uint64_t[thread_num];
     insert_using_shifts_call_cnt = new uint64_t[thread_num];
     insert_element_at_call_cnt = new uint64_t[thread_num];
+    find_key_call_cnt = new uint64_t[thread_num];
   }
 
   void profileReInit () {
     for (uint32_t i = 0; i < td_num; ++i) {
-      get_payload_time[i] = 0;
-      max_get_payload_time[i] = std::numeric_limits<fgStatType>::min();
-      min_get_payload_time[i] = std::numeric_limits<fgStatType>::max();
+      get_payload_from_superroot_success_time[i] = 0;
+      max_get_payload_from_superroot_success_time[i] = std::numeric_limits<fgStatType>::min();
+      min_get_payload_from_superroot_success_time[i] = std::numeric_limits<fgStatType>::max();
+      
+      get_payload_from_parent_success_time[i] = 0;
+      max_get_payload_from_parent_success_time[i] = std::numeric_limits<fgStatType>::min();
+      min_get_payload_from_parent_success_time[i] = std::numeric_limits<fgStatType>::max();
+
+      get_payload_from_superroot_fail_time[i] = 0;
+      max_get_payload_from_superroot_fail_time[i] = std::numeric_limits<fgStatType>::min();
+      min_get_payload_from_superroot_fail_time[i] = std::numeric_limits<fgStatType>::max();
+
+      get_payload_from_parent_fail_time[i] = 0;
+      max_get_payload_from_parent_fail_time[i] = std::numeric_limits<fgStatType>::min();
+      min_get_payload_from_parent_fail_time[i] = std::numeric_limits<fgStatType>::max();
 
       insert_from_superroot_success_time[i] = 0;
       max_insert_from_superroot_success_time[i] = std::numeric_limits<fgStatType>::min();
@@ -841,10 +897,14 @@ struct ProfileStats {
       max_insert_from_parent_fail_time[i] = std::numeric_limits<fgStatType>::min();
       min_insert_from_parent_fail_time[i] = std::numeric_limits<fgStatType>::max();
 
-      get_leaf_from_get_payload_time[i] = 0;
-      max_get_leaf_from_get_payload_time[i] = std::numeric_limits<fgStatType>::min();
-      min_get_leaf_from_get_payload_time[i] = std::numeric_limits<fgStatType>::max();
+      get_leaf_from_get_payload_superroot_time[i] = 0;
+      max_get_leaf_from_get_payload_superroot_time[i] = std::numeric_limits<fgStatType>::min();
+      min_get_leaf_from_get_payload_superroot_time[i] = std::numeric_limits<fgStatType>::max();
 
+      get_leaf_from_get_payload_directp_time[i] = 0;
+      max_get_leaf_from_get_payload_directp_time[i] = std::numeric_limits<fgStatType>::min();
+      min_get_leaf_from_get_payload_directp_time[i] = std::numeric_limits<fgStatType>::max();
+    
       get_leaf_from_insert_superroot_time[i] = 0;
       max_get_leaf_from_insert_superroot_time[i] = std::numeric_limits<fgStatType>::min();
       min_get_leaf_from_insert_superroot_time[i] = std::numeric_limits<fgStatType>::max();
@@ -865,19 +925,25 @@ struct ProfileStats {
       max_insert_element_at_time[i] = std::numeric_limits<fgStatType>::min();
       min_insert_element_at_time[i] = std::numeric_limits<fgStatType>::max();
 
-      get_payload_call_cnt[i] = 0;
+      get_payload_superroot_call_cnt[i] = 0;
+      get_payload_directp_call_cnt[i] = 0;
+      get_payload_superroot_success_cnt[i] = 0;
+      get_payload_directp_success_cnt[i] = 0;
+      get_payload_superroot_fail_cnt[i] = 0;
+      get_payload_directp_fail_cnt[i] = 0;
       insert_superroot_call_cnt[i] = 0;
       insert_directp_call_cnt[i] = 0;
       insert_superroot_success_cnt[i] = 0;
       insert_directp_success_cnt[i] = 0;
       insert_superroot_fail_cnt[i] = 0;
       insert_directp_fail_cnt[i] = 0;
-      get_leaf_from_get_payload_call_cnt[i] = 0;
+      get_leaf_from_get_payload_superroot_call_cnt[i] = 0;
+      get_leaf_from_get_payload_directp_call_cnt[i] = 0;
       get_leaf_from_insert_superroot_call_cnt[i] = 0;
       get_leaf_from_insert_directp_call_cnt[i] = 0;
       insert_using_shifts_call_cnt[i] = 0;
       insert_element_at_call_cnt[i] = 0;
-
+      find_key_call_cnt[i] = 0;
     }
 
     resize_time = 0;
@@ -907,9 +973,18 @@ struct ProfileStats {
 
   //deleting profile structures
   void profileDelete () {
-    delete[] get_payload_time;
-    delete[] max_get_payload_time;
-    delete[] min_get_payload_time;
+    delete[] get_payload_from_superroot_success_time;
+    delete[] max_get_payload_from_superroot_success_time;
+    delete[] min_get_payload_from_superroot_success_time;
+    delete[] get_payload_from_parent_success_time;
+    delete[] max_get_payload_from_parent_success_time;
+    delete[] min_get_payload_from_parent_success_time;
+    delete[] get_payload_from_superroot_fail_time;
+    delete[] max_get_payload_from_superroot_fail_time;
+    delete[] min_get_payload_from_superroot_fail_time;
+    delete[] get_payload_from_parent_fail_time;
+    delete[] max_get_payload_from_parent_fail_time;
+    delete[] min_get_payload_from_parent_fail_time;
     delete[] insert_from_superroot_success_time;
     delete[] max_insert_from_superroot_success_time;
     delete[] min_insert_from_superroot_success_time;
@@ -922,9 +997,12 @@ struct ProfileStats {
     delete[] insert_from_parent_fail_time;
     delete[] max_insert_from_parent_fail_time;
     delete[] min_insert_from_parent_fail_time;
-    delete[] get_leaf_from_get_payload_time;
-    delete[] max_get_leaf_from_get_payload_time;
-    delete[] min_get_leaf_from_get_payload_time;
+    delete[] get_leaf_from_get_payload_superroot_time;
+    delete[] max_get_leaf_from_get_payload_superroot_time;
+    delete[] min_get_leaf_from_get_payload_superroot_time;
+    delete[] get_leaf_from_get_payload_directp_time;
+    delete[] max_get_leaf_from_get_payload_directp_time;
+    delete[] min_get_leaf_from_get_payload_directp_time;
     delete[] get_leaf_from_insert_superroot_time;
     delete[] max_get_leaf_from_insert_superroot_time;
     delete[] min_get_leaf_from_insert_superroot_time;
@@ -940,26 +1018,42 @@ struct ProfileStats {
     delete[] insert_element_at_time;
     delete[] max_insert_element_at_time;
     delete[] min_insert_element_at_time;
-    delete[] get_payload_call_cnt;
+    delete[] get_payload_superroot_call_cnt;
+    delete[] get_payload_directp_call_cnt;
+    delete[] get_payload_superroot_success_cnt;
+    delete[] get_payload_directp_success_cnt;
+    delete[] get_payload_superroot_fail_cnt;
+    delete[] get_payload_directp_fail_cnt;
     delete[] insert_superroot_call_cnt;
     delete[] insert_directp_call_cnt;
     delete[] insert_superroot_success_cnt;
     delete[] insert_directp_success_cnt;
     delete[] insert_superroot_fail_cnt;
     delete[] insert_directp_fail_cnt;
-    delete[] get_leaf_from_get_payload_call_cnt;
+    delete[] get_leaf_from_get_payload_superroot_call_cnt;
+    delete[] get_leaf_from_get_payload_directp_call_cnt;
     delete[] get_leaf_from_insert_superroot_call_cnt;
     delete[] get_leaf_from_insert_directp_call_cnt;
     delete[] insert_using_shifts_call_cnt;
     delete[] insert_element_at_call_cnt;
+    delete[] find_key_call_cnt;
   }
 
   //prints max, min, average time + call count
   void printProfileStats() {
     //container for saving total stats
-    fgStatType get_payload_time_cumu = 0,
-               max_get_payload_time_cumu = std::numeric_limits<fgStatType>::min(),
-               min_get_payload_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType get_payload_from_superroot_success_time_cumu = 0,
+               max_get_payload_from_superroot_success_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_get_payload_from_superroot_success_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType get_payload_from_parent_success_time_cumu = 0,
+               max_get_payload_from_parent_success_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_get_payload_from_parent_success_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType get_payload_from_superroot_fail_time_cumu = 0,
+               max_get_payload_from_superroot_fail_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_get_payload_from_superroot_fail_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType get_payload_from_parent_fail_time_cumu = 0,
+               max_get_payload_from_parent_fail_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_get_payload_from_parent_fail_time_cumu = std::numeric_limits<fgStatType>::max();
     fgStatType insert_from_superroot_success_time_cumu = 0,
                max_insert_from_superroot_success_time_cumu = std::numeric_limits<fgStatType>::min(),
                min_insert_from_superroot_success_time_cumu = std::numeric_limits<fgStatType>::max();
@@ -972,9 +1066,12 @@ struct ProfileStats {
     fgStatType insert_from_parent_fail_time_cumu = 0,
                max_insert_from_parent_fail_time_cumu = std::numeric_limits<fgStatType>::min(),
                min_insert_from_parent_fail_time_cumu = std::numeric_limits<fgStatType>::max();
-    fgStatType get_leaf_from_get_payload_time_cumu = 0,
-               max_get_leaf_from_get_payload_time_cumu = std::numeric_limits<fgStatType>::min(),
-               min_get_leaf_from_get_payload_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType get_leaf_from_get_payload_superroot_time_cumu = 0,
+               max_get_leaf_from_get_payload_superroot_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_get_leaf_from_get_payload_superroot_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType get_leaf_from_get_payload_directp_time_cumu = 0,
+               max_get_leaf_from_get_payload_directp_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_get_leaf_from_get_payload_directp_time_cumu = std::numeric_limits<fgStatType>::max();
     fgStatType get_leaf_from_insert_superroot_time_cumu = 0,
                max_get_leaf_from_insert_superroot_time_cumu = std::numeric_limits<fgStatType>::min(),
                min_get_leaf_from_insert_superroot_time_cumu = std::numeric_limits<fgStatType>::max();
@@ -991,27 +1088,49 @@ struct ProfileStats {
                max_insert_element_at_time_cumu = std::numeric_limits<fgStatType>::min(),
                min_insert_element_at_time_cumu = std::numeric_limits<fgStatType>::max();
     
-    uint64_t get_payload_call_cnt_total = 0;
+    uint64_t get_payload_superroot_call_cnt_total = 0;
+    uint64_t get_payload_directp_call_cnt_total = 0;
+    uint64_t get_payload_superroot_success_cnt_total = 0;
+    uint64_t get_payload_directp_success_cnt_total = 0;
+    uint64_t get_payload_superroot_fail_cnt_total = 0;
+    uint64_t get_payload_directp_fail_cnt_total = 0;
     uint64_t insert_superroot_call_cnt_total = 0;
     uint64_t insert_directp_call_cnt_total = 0;
     uint64_t insert_superroot_success_cnt_total = 0;
     uint64_t insert_directp_success_cnt_total = 0;
     uint64_t insert_superroot_fail_cnt_total = 0;
     uint64_t insert_directp_fail_cnt_total = 0;
-    uint64_t get_leaf_from_get_payload_call_cnt_total = 0;
+    uint64_t get_leaf_from_get_payload_superroot_call_cnt_total = 0;
+    uint64_t get_leaf_from_get_payload_directp_call_cnt_total = 0;
     uint64_t get_leaf_from_insert_superroot_call_cnt_total = 0;
     uint64_t get_leaf_from_insert_directp_call_cnt_total = 0;
     uint64_t insert_using_shifts_call_cnt_total = 0;
     uint64_t insert_element_at_call_cnt_total = 0;
-
+    uint64_t find_key_call_cnt_total = 0;
 
     std::cout << "current batch's profile result is\n\n";
 
     for (uint32_t i = 0; i < td_num; ++i) {
       //computation
-      get_payload_time_cumu +=  get_payload_call_cnt[i] ? get_payload_time[i] / get_payload_call_cnt[i] : 0;
-      max_get_payload_time_cumu = std::max(max_get_payload_time_cumu, max_get_payload_time[i]);
-      min_get_payload_time_cumu = std::min(min_get_payload_time_cumu, min_get_payload_time[i]);
+      get_payload_from_superroot_success_time_cumu += get_payload_superroot_success_cnt[i] ? 
+          get_payload_from_superroot_success_time[i] / get_payload_superroot_success_cnt[i] : 0;
+      max_get_payload_from_superroot_success_time_cumu = std::max(max_get_payload_from_superroot_success_time_cumu, max_get_payload_from_superroot_success_time[i]);
+      min_get_payload_from_superroot_success_time_cumu = std::min(min_get_payload_from_superroot_success_time_cumu, min_get_payload_from_superroot_success_time[i]);
+
+      get_payload_from_parent_success_time_cumu += get_payload_directp_success_cnt[i] ?
+          get_payload_from_parent_success_time[i] / get_payload_directp_success_cnt[i] : 0;
+      max_get_payload_from_parent_success_time_cumu = std::max(max_get_payload_from_parent_success_time_cumu, max_get_payload_from_parent_success_time[i]);
+      min_get_payload_from_parent_success_time_cumu = std::min(min_get_payload_from_parent_success_time_cumu, min_insert_from_parent_success_time[i]);
+
+      get_payload_from_superroot_fail_time_cumu += get_payload_superroot_fail_cnt[i] ?
+          get_payload_from_superroot_fail_time[i] / get_payload_superroot_fail_cnt[i] : 0;
+      max_get_payload_from_superroot_fail_time_cumu = std::max(max_get_payload_from_superroot_fail_time[i], max_get_payload_from_superroot_fail_time_cumu);
+      min_get_payload_from_superroot_fail_time_cumu = std::min(min_get_payload_from_superroot_fail_time[i], min_get_payload_from_superroot_fail_time_cumu);
+
+      get_payload_from_parent_fail_time_cumu += get_payload_directp_fail_cnt[i] ?
+          get_payload_from_parent_fail_time[i] / get_payload_directp_fail_cnt[i] : 0;
+      max_get_payload_from_parent_fail_time_cumu = std::max(max_get_payload_from_parent_fail_time[i], max_get_payload_from_parent_fail_time_cumu);
+      min_get_payload_from_parent_fail_time_cumu = std::min(min_get_payload_from_parent_fail_time[i], min_get_payload_from_parent_fail_time_cumu);
 
       insert_from_superroot_success_time_cumu += insert_superroot_success_cnt[i] ? 
           insert_from_superroot_success_time[i] / insert_superroot_success_cnt[i] : 0;
@@ -1033,10 +1152,15 @@ struct ProfileStats {
       max_insert_from_parent_fail_time_cumu = std::max(max_insert_from_parent_fail_time[i], max_insert_from_parent_fail_time_cumu);
       min_insert_from_parent_fail_time_cumu = std::min(min_insert_from_parent_fail_time[i], min_insert_from_parent_fail_time_cumu);
 
-      get_leaf_from_get_payload_time_cumu += get_leaf_from_get_payload_call_cnt[i] ?
-          get_leaf_from_get_payload_time[i] / get_leaf_from_get_payload_call_cnt[i] : 0;
-      max_get_leaf_from_get_payload_time_cumu = std::max(max_get_leaf_from_get_payload_time[i], max_get_leaf_from_get_payload_time_cumu);
-      min_get_leaf_from_get_payload_time_cumu = std::min(min_get_leaf_from_get_payload_time[i], min_get_leaf_from_get_payload_time_cumu);
+      get_leaf_from_get_payload_superroot_time_cumu += get_leaf_from_get_payload_superroot_call_cnt[i] ?
+          get_leaf_from_get_payload_superroot_time[i] / get_leaf_from_get_payload_superroot_call_cnt[i] : 0;
+      max_get_leaf_from_get_payload_superroot_time_cumu = std::max(max_get_leaf_from_get_payload_superroot_time[i], max_get_leaf_from_get_payload_superroot_time_cumu);
+      min_get_leaf_from_get_payload_superroot_time_cumu = std::min(min_get_leaf_from_get_payload_superroot_time[i], min_get_leaf_from_get_payload_superroot_time_cumu);
+
+      get_leaf_from_get_payload_directp_time_cumu += get_leaf_from_get_payload_directp_call_cnt[i] ?
+          get_leaf_from_get_payload_directp_time[i] / get_leaf_from_get_payload_directp_call_cnt[i] : 0;
+      max_get_leaf_from_get_payload_directp_time_cumu = std::max(max_get_leaf_from_get_payload_directp_time[i], max_get_leaf_from_get_payload_directp_time_cumu);
+      min_get_leaf_from_get_payload_directp_time_cumu = std::min(min_get_leaf_from_get_payload_directp_time[i], min_get_leaf_from_get_payload_directp_time_cumu);
 
       get_leaf_from_insert_superroot_time_cumu += get_leaf_from_insert_superroot_call_cnt[i] ?
           get_leaf_from_insert_superroot_time[i] / get_leaf_from_insert_superroot_call_cnt[i] : 0;
@@ -1048,8 +1172,8 @@ struct ProfileStats {
       max_get_leaf_from_insert_directp_time_cumu = std::max(max_get_leaf_from_insert_directp_time[i], max_get_leaf_from_insert_directp_time_cumu);
       min_get_leaf_from_insert_directp_time_cumu = std::min(min_get_leaf_from_insert_directp_time[i], min_get_leaf_from_insert_directp_time_cumu);
 
-      find_key_time_cumu += get_payload_call_cnt[i] ?
-          find_key_time[i] / get_payload_call_cnt[i] : 0;
+      find_key_time_cumu += find_key_call_cnt[i] ?
+          find_key_time[i] / find_key_call_cnt[i] : 0;
       max_find_key_time_cumu = std::max(max_find_key_time[i], max_find_key_time_cumu);
       min_find_key_time_cumu = std::min(min_find_key_time[i], min_find_key_time_cumu);
 
@@ -1063,38 +1187,59 @@ struct ProfileStats {
       max_insert_element_at_time_cumu = std::max(max_insert_element_at_time[i], max_insert_element_at_time_cumu);
       min_insert_element_at_time_cumu = std::min(min_insert_element_at_time[i], min_insert_element_at_time_cumu);
       
-      get_payload_call_cnt_total += get_payload_call_cnt[i];
+      get_payload_superroot_call_cnt_total += get_payload_superroot_call_cnt[i];
+      get_payload_directp_call_cnt_total += get_payload_directp_call_cnt[i];
+      get_payload_superroot_success_cnt_total += get_payload_superroot_success_cnt[i];
+      get_payload_directp_success_cnt_total += get_payload_directp_success_cnt[i];
+      get_payload_superroot_fail_cnt_total += get_payload_superroot_fail_cnt[i];
+      get_payload_directp_fail_cnt_total += get_payload_directp_fail_cnt[i];
       insert_superroot_call_cnt_total += insert_superroot_call_cnt[i];
       insert_directp_call_cnt_total += insert_directp_call_cnt[i];
       insert_superroot_success_cnt_total += insert_superroot_success_cnt[i];
       insert_directp_success_cnt_total += insert_directp_success_cnt[i];
       insert_superroot_fail_cnt_total += insert_superroot_fail_cnt[i];
       insert_directp_fail_cnt_total += insert_directp_fail_cnt[i];
-      get_leaf_from_get_payload_call_cnt_total += get_leaf_from_get_payload_call_cnt[i];
+      get_leaf_from_get_payload_superroot_call_cnt_total += get_leaf_from_get_payload_superroot_call_cnt[i];
+      get_leaf_from_get_payload_directp_call_cnt_total += get_leaf_from_get_payload_directp_call_cnt[i];
       get_leaf_from_insert_superroot_call_cnt_total += get_leaf_from_insert_superroot_call_cnt[i];
       get_leaf_from_insert_directp_call_cnt_total += get_leaf_from_insert_directp_call_cnt[i];
       insert_using_shifts_call_cnt_total += insert_using_shifts_call_cnt[i];
       insert_element_at_call_cnt_total += insert_element_at_call_cnt[i];
+      find_key_call_cnt_total += find_key_call_cnt[i];
 
       //print
       std::cout << "-thread " << i << " -\n\n";
 
       std::cout << "-countings-\n"
-              << "get_payload_call_cnt : " << get_payload_call_cnt[i] << '\n'
+              << "get_payload_superroot_call_cnt : " << get_payload_superroot_call_cnt[i] << '\n'
+              << "get_payload_directp_call_cnt : " << get_payload_directp_call_cnt[i] << '\n'
+              << "get_payload_superroot_success_cnt : " << get_payload_superroot_success_cnt[i] << '\n'
+              << "get_payload_directp_success_cnt : " << get_payload_directp_success_cnt[i] << '\n'
+              << "get_payload_superroot_fail_cnt : " << get_payload_superroot_fail_cnt[i] << '\n'
+              << "get_payload_directp_fail_cnt : " << get_payload_directp_fail_cnt[i] << '\n'
               << "insert_superroot_call_cnt : " << insert_superroot_call_cnt[i] << '\n'
               << "insert_directp_call_cnt : " << insert_directp_call_cnt[i] << '\n'
               << "insert_superroot_success_cnt : " << insert_superroot_success_cnt[i] << '\n'
               << "insert_directp_success_cnt : " << insert_directp_success_cnt[i] << '\n'
               << "insert_superroot_fail_cnt : " << insert_superroot_fail_cnt[i] << '\n'
               << "insert_directp_fail_cnt : " << insert_directp_fail_cnt[i] << '\n'
-              << "get_leaf_from_get_payload_call_cnt : " << get_leaf_from_get_payload_call_cnt[i] << '\n'
+              << "get_leaf_from_get_payload_superroot_call_cnt : " << get_leaf_from_get_payload_superroot_call_cnt[i] << '\n'
+              << "get_leaf_from_get_payload_directp_call_cnt : " << get_leaf_from_get_payload_directp_call_cnt[i] << '\n'
               << "get_leaf_from_insert_superroot_call_cnt : " << get_leaf_from_insert_superroot_call_cnt[i] << '\n'
               << "get_leaf_from_insert_directp_call_cnt : " << get_leaf_from_insert_directp_call_cnt[i] << '\n'
               << "insert_using_shifts_call_cnt : " << insert_using_shifts_call_cnt[i] << '\n'
-              << "insert_element_at_call_cnt : " << insert_element_at_call_cnt[i] << "\n\n";
+              << "insert_element_at_call_cnt : " << insert_element_at_call_cnt[i] << '\n'
+              << "find_key_call_cnt : " << find_key_call_cnt[i] << "\n\n";
 
       std::cout << "-average time-\n"
-                << "get_payload_time : " << (get_payload_call_cnt[i] ? get_payload_time[i] / get_payload_call_cnt[i] : 0) << '\n'
+                << "get_payload_from_superroot_success_time : " << (get_payload_superroot_success_cnt[i] ? 
+                    get_payload_from_superroot_success_time[i] / get_payload_superroot_success_cnt[i] : 0) << '\n'
+                << "get_payload_from_parent_success_time : " << (get_payload_directp_success_cnt[i] ? 
+                    get_payload_from_parent_success_time[i] / get_payload_directp_success_cnt[i] : 0) << '\n'
+                << "get_payload_from_superroot_fail_time : " << (get_payload_superroot_fail_cnt[i] ? 
+                    get_payload_from_superroot_fail_time[i] / get_payload_superroot_fail_cnt[i] : 0) << '\n'
+                << "get_payload_from_parent_fail_time : " << (get_payload_directp_fail_cnt[i] ?
+                    get_payload_from_parent_fail_time[i] / get_payload_directp_fail_cnt[i] : 0) << '\n'
                 << "insert_from_superroot_success_time : " << (insert_superroot_success_cnt[i] ? 
                     insert_from_superroot_success_time[i] / insert_superroot_success_cnt[i] : 0) << '\n'
                 << "insert_from_parent_success_time : " << (insert_directp_success_cnt[i] ?
@@ -1103,25 +1248,31 @@ struct ProfileStats {
                     insert_from_superroot_fail_time[i] / insert_superroot_fail_cnt[i] : 0) << '\n'
                 << "insert_from_parent_fail_time : " << (insert_directp_fail_cnt[i] ? 
                     insert_from_parent_fail_time[i] / insert_directp_fail_cnt[i] : 0) << '\n'
-                << "get_leaf_from_get_payload_time : " << (get_leaf_from_get_payload_call_cnt[i] ? 
-                    get_leaf_from_get_payload_time[i] / get_leaf_from_get_payload_call_cnt[i] : 0) << '\n'
+                << "get_leaf_from_get_payload_superroot_time : " << (get_leaf_from_get_payload_superroot_call_cnt[i] ?
+                    get_leaf_from_get_payload_superroot_time[i] / get_leaf_from_get_payload_superroot_call_cnt[i] : 0) << '\n'
+                << "get_leaf_from_get_payload_directp_time : " << (get_leaf_from_get_payload_directp_call_cnt[i] ?
+                    get_leaf_from_get_payload_directp_time[i] / get_leaf_from_get_payload_directp_call_cnt[i] : 0) << '\n'
                 << "get_leaf_from_insert_superroot_time : " << (get_leaf_from_insert_superroot_call_cnt[i] ?
                     get_leaf_from_insert_superroot_time[i] / get_leaf_from_insert_superroot_call_cnt[i] : 0) << '\n'
                 << "get_leaf_from_insert_directp_time : " << (get_leaf_from_insert_directp_call_cnt[i] ?
                     get_leaf_from_insert_directp_time[i] / get_leaf_from_insert_directp_call_cnt[i] : 0) << '\n'
-                << "find_key_time : " << (get_payload_call_cnt[i] ? find_key_time[i] / get_payload_call_cnt[i] : 0) << '\n'
+                << "find_key_time : " << (find_key_call_cnt[i] ? find_key_time[i] / find_key_call_cnt[i] : 0) << '\n'
                 << "insert_using_shifts_time : " << (insert_using_shifts_call_cnt[i] ?
                     insert_using_shifts_time[i] / insert_using_shifts_call_cnt[i] : 0) << '\n'
                 << "insert_element_at_time : " << (insert_element_at_call_cnt[i] ? 
                     insert_element_at_time[i] / insert_element_at_call_cnt[i] : 0) << "\n\n";
 
       std::cout << "-max time-\n"
-                << "max_get_payload_time : " << max_get_payload_time[i] << '\n'
+                << "max_get_payload_from_superroot_success_time : " << max_get_payload_from_superroot_success_time[i] << '\n'
+                << "max_get_payload_from_parent_success_time : " << max_get_payload_from_parent_success_time[i] << '\n'
+                << "max_get_payload_from_superroot_fail_time : " << max_get_payload_from_superroot_fail_time[i] << '\n'
+                << "max_get_payload_from_parent_fail_time : " << max_get_payload_from_parent_fail_time[i] << '\n'
                 << "max_insert_from_superroot_success_time : " << max_insert_from_superroot_success_time[i] << '\n'
                 << "max_insert_from_parent_success_time : " << max_insert_from_parent_success_time[i] << '\n'
                 << "max_insert_from_superroot_fail_time : " << max_insert_from_superroot_fail_time[i] << '\n'
                 << "max_insert_from_parent_fail_time : " << max_insert_from_parent_fail_time[i] << '\n'
-                << "max_get_leaf_from_get_payload_time : " << max_get_leaf_from_get_payload_time[i] << '\n'
+                << "max_get_leaf_from_get_payload_superroot_time : " << max_get_leaf_from_get_payload_superroot_time[i] << '\n'
+                << "max_get_leaf_from_get_payload_directp_time : " << max_get_leaf_from_get_payload_directp_time[i] << '\n'
                 << "max_get_leaf_from_insert_superroot_time : " << max_get_leaf_from_insert_superroot_time[i] << '\n'
                 << "max_get_leaf_from_insert_directp_time : " << max_get_leaf_from_insert_directp_time[i] << '\n'
                 << "max_find_key_time : " << max_find_key_time[i] << '\n'
@@ -1129,12 +1280,16 @@ struct ProfileStats {
                 << "max_insert_element_at_time : " << max_insert_element_at_time[i] << "\n\n";
 
       std::cout << "-min time-\n"
-                << "min_get_payload_time : " << min_get_payload_time[i] << '\n'
+                << "min_get_payload_from_superroot_success_time : " << min_get_payload_from_superroot_success_time[i] << '\n'
+                << "min_get_payload_from_parent_success_time : " << min_get_payload_from_parent_success_time[i] << '\n'
+                << "min_get_payload_from_superroot_fail_time : " << min_get_payload_from_superroot_fail_time[i] << '\n'
+                << "min_get_payload_from_parent_fail_time : " << min_get_payload_from_parent_fail_time[i] << '\n'
                 << "min_insert_from_superroot_success_time : " << min_insert_from_superroot_success_time[i] << '\n'
                 << "min_insert_from_parent_success_time : " << min_insert_from_parent_success_time[i] << '\n'
                 << "min_insert_from_superroot_fail_time : " << min_insert_from_superroot_fail_time[i] << '\n'
                 << "min_insert_from_parent_fail_time : " << min_insert_from_parent_fail_time[i] << '\n'
-                << "min_get_leaf_from_get_payload_time : " << min_get_leaf_from_get_payload_time[i] << '\n'
+                << "min_get_leaf_from_get_payload_superroot_time : " << min_get_leaf_from_get_payload_superroot_time[i] << '\n'
+                << "min_get_leaf_from_get_payload_directp_time : " << min_get_leaf_from_get_payload_directp_time[i] << '\n'
                 << "min_get_leaf_from_insert_superroot_time : " << min_get_leaf_from_insert_superroot_time[i] << '\n'
                 << "min_get_leaf_from_insert_directp_time : " << min_get_leaf_from_insert_directp_time[i] << '\n'
                 << "min_find_key_time : " << min_find_key_time[i] << '\n'
@@ -1144,26 +1299,37 @@ struct ProfileStats {
 
     std::cout << "-foreground total-\n\n";
     std::cout << "-countings-\n"
-              << "get_payload_call_cnt_total : " << get_payload_call_cnt_total << '\n'
+              << "get_payload_superroot_call_cnt_total : " << get_payload_superroot_call_cnt_total << '\n'
+              << "get_payload_directp_call_cnt_total : " << get_payload_directp_call_cnt_total << '\n'
+              << "get_payload_superroot_success_cnt_total : " << get_payload_superroot_success_cnt_total << '\n'
+              << "get_payload_directp_success_cnt_total : " << get_payload_directp_success_cnt_total << '\n'
+              << "get_payload_superroot_fail_cnt_total : " << get_payload_superroot_fail_cnt_total << '\n'
+              << "get_payload_directp_fail_cnt_total : " << get_payload_directp_fail_cnt_total << '\n'
               << "insert_superroot_call_cnt_total : " << insert_superroot_call_cnt_total << '\n'
               << "insert_directp_call_cnt_total : " << insert_directp_call_cnt_total << '\n'
               << "insert_superroot_success_cnt_total : " << insert_superroot_success_cnt_total << '\n'
               << "insert_directp_success_cnt_total : " << insert_directp_success_cnt_total << '\n'
               << "insert_superroot_fail_cnt_total : " << insert_superroot_fail_cnt_total << '\n'
               << "insert_directp_fail_cnt_total : " << insert_directp_fail_cnt_total << '\n'
-              << "get_leaf_from_get_payload_call_cnt_total : " << get_leaf_from_get_payload_call_cnt_total << '\n'
+              << "get_leaf_from_get_payload_superroot_call_cnt_total : " << get_leaf_from_get_payload_superroot_call_cnt_total << '\n'
+              << "get_leaf_from_get_payload_directp_call_cnt_total : " << get_leaf_from_get_payload_directp_call_cnt_total << '\n'
               << "get_leaf_from_insert_superroot_call_cnt_total : " << get_leaf_from_insert_superroot_call_cnt_total << '\n'
               << "get_leaf_from_insert_directp_call_cnt_total : " << get_leaf_from_insert_directp_call_cnt_total << '\n'
               << "insert_using_shifts_call_cnt_total : " << insert_using_shifts_call_cnt_total << '\n'
-              << "insert_element_at_call_cnt_total : " << insert_element_at_call_cnt_total << "\n\n";
+              << "insert_element_at_call_cnt_total : " << insert_element_at_call_cnt_total << '\n'
+              << "find_key_call_cnt_total : " << find_key_call_cnt_total << "\n\n";
 
     std::cout << "-average time-\n"
-              << "get_payload_time : " << get_payload_time_cumu / td_num << '\n'
+              << "insert_from_superroot_success_time : " << get_payload_from_superroot_success_time_cumu / td_num << '\n'
+              << "insert_from_parent_success_time : " << get_payload_from_parent_success_time_cumu / td_num << '\n'
+              << "insert_from_superroot_fail_time : " << get_payload_from_superroot_fail_time_cumu / td_num << '\n'
+              << "insert_from_parent_fail_time : " << get_payload_from_parent_fail_time_cumu / td_num << '\n'
               << "insert_from_superroot_success_time : " << insert_from_superroot_success_time_cumu / td_num << '\n'
               << "insert_from_parent_success_time : " << insert_from_parent_success_time_cumu / td_num << '\n'
               << "insert_from_superroot_fail_time : " << insert_from_superroot_fail_time_cumu / td_num << '\n'
               << "insert_from_parent_fail_time : " << insert_from_parent_fail_time_cumu / td_num << '\n'
-              << "get_leaf_from_get_payload_time : " << get_leaf_from_get_payload_time_cumu / td_num  << '\n'
+              << "get_leaf_from_get_payload_superroot_time_cumu : " << get_leaf_from_insert_superroot_time_cumu / td_num  << '\n'
+              << "get_leaf_from_get_payload_directp_time_cumu : " << get_leaf_from_insert_directp_time_cumu / td_num  << '\n'
               << "get_leaf_from_insert_superroot_time : " << get_leaf_from_insert_superroot_time_cumu / td_num  << '\n'
               << "get_leaf_from_insert_directp_time : " << get_leaf_from_insert_directp_time_cumu / td_num  << '\n'
               << "find_key_time" << find_key_time_cumu / td_num << '\n'
@@ -1172,12 +1338,16 @@ struct ProfileStats {
 
 
     std::cout << "-max time-\n"
-              << "max_get_payload_time : " << max_get_payload_time_cumu << '\n'
+              << "max_get_payload_from_superroot_success_time_cumu : " << max_get_payload_from_superroot_success_time_cumu << '\n'
+              << "max_get_payload_from_parent_success_time_cumu : " << max_get_payload_from_parent_success_time_cumu << '\n'
+              << "max_get_payload_from_superroot_fail_time_cumu : " << max_get_payload_from_superroot_fail_time_cumu << '\n'
+              << "max_get_payload_from_parent_fail_time_cumu : " << max_get_payload_from_parent_fail_time_cumu << '\n'
               << "max_insert_from_superroot_success_time : " << max_insert_from_superroot_success_time_cumu << '\n'
               << "max_insert_from_parent_success_time : " << max_insert_from_parent_success_time_cumu << '\n'
               << "max_insert_from_superroot_fail_time : " << max_insert_from_superroot_fail_time_cumu << '\n'
               << "max_insert_from_parent_fail_time : " << max_insert_from_parent_fail_time_cumu << '\n'
-              << "max_get_leaf_from_get_payload_time : " << max_get_leaf_from_get_payload_time_cumu << '\n'
+              << "get_leaf_from_get_payload_superroot_time_cumu : " << get_leaf_from_get_payload_superroot_time_cumu << '\n'
+              << "get_leaf_from_get_payload_directp_time_cumu : " << get_leaf_from_get_payload_directp_time_cumu << '\n'
               << "max_get_leaf_from_insert_superroot_time : " << max_get_leaf_from_insert_superroot_time_cumu << '\n'
               << "max_get_leaf_from_insert_directp_time : " << max_get_leaf_from_insert_directp_time_cumu << '\n'
               << "max_find_key_time : " << max_find_key_time_cumu << '\n'
@@ -1186,12 +1356,16 @@ struct ProfileStats {
 
 
     std::cout << "-min time-\n"
-              << "min_get_payload_time : " << min_get_payload_time_cumu << '\n'
+              << "min_get_payload_from_superroot_success_time_cumu : " << min_get_payload_from_superroot_success_time_cumu << '\n'
+              << "min_get_payload_from_parent_success_time_cumu : " << min_get_payload_from_parent_success_time_cumu << '\n'
+              << "min_get_payload_from_superroot_fail_time_cumu : " << min_get_payload_from_superroot_fail_time_cumu << '\n'
+              << "min_get_payload_from_parent_fail_time_cumu : " << min_get_payload_from_parent_fail_time_cumu << '\n'
               << "min_insert_from_superroot_success_time : " << min_insert_from_superroot_success_time_cumu << '\n'
               << "min_insert_from_parent_success_time : " << min_insert_from_parent_success_time_cumu << '\n'
               << "min_insert_from_superroot_fail_time : " << min_insert_from_superroot_fail_time_cumu << '\n'
               << "min_insert_from_parent_fail_time : " << min_insert_from_parent_fail_time_cumu << '\n'
-              << "min_get_leaf_from_get_payload_time : " << min_get_leaf_from_get_payload_time_cumu << '\n'
+              << "min_get_leaf_from_get_payload_superroot_time_cumu : " << min_get_leaf_from_get_payload_superroot_time_cumu << '\n'
+              << "min_get_leaf_from_get_payload_directp_time_cumu : " << min_get_leaf_from_get_payload_directp_time_cumu << '\n'
               << "min_get_leaf_from_insert_superroot_time : " << min_get_leaf_from_insert_superroot_time_cumu << '\n'
               << "min_get_leaf_from_insert_directp_time : " << min_get_leaf_from_insert_directp_time_cumu << '\n'
               << "min_find_key_time : " << min_find_key_time_cumu << '\n'
@@ -1235,6 +1409,7 @@ struct ProfileStats {
 };
 
 ProfileStats profileStats;
+#endif
 
 /* utils for multithreading
  * Many of this code is copied from Xindex */
@@ -1284,7 +1459,9 @@ struct AtomicVal {
   uint64_t get_version(uint64_t status) { return status & version_mask; }
 
   void lock() {
+#if PROFILE
     profileStats.lock_achieve_cnt++;
+#endif
     auto lock_start_time = std::chrono::high_resolution_clock::now();
     while (true) {
       uint64_t old = status;
@@ -1294,7 +1471,9 @@ struct AtomicVal {
                  expected)) {
         auto lock_end_time = std::chrono::high_resolution_clock::now();
         auto elapsed_time = std::chrono::duration_cast<std::chrono::nanoseconds>(lock_end_time - lock_start_time).count();
+#if PROFILE
         profileStats.lock_achieve_time += elapsed_time;
+#endif
         return;
       }
     }
