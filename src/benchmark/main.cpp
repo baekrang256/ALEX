@@ -377,8 +377,8 @@ void *run_fg(void *param) {
       alex::coutLock.unlock();
 #endif
       std::pair<bool, PAYLOAD_TYPE> payload = table->get_payload(key, thread_id);
-      if (print_key_stats) {
-        if (payload.first) {
+      if (payload.first) {
+        if (print_key_stats) {
           alex::coutLock.lock();
           std::cout << "t" << thread_id << " - ";
           for (unsigned int k = 0; k < max_key_length; k++) {
@@ -387,18 +387,20 @@ void *run_fg(void *param) {
           std::cout << " payload is : " << payload.second << std::endl;
           alex::coutLock.unlock();
         }
-        else {
-          alex::coutLock.lock();
-          std::cout << "t" << thread_id << " - ";
-          std::cout << "failed finding payload." << std::endl;
-          if (strict_read) {
-            std::cout << "aborting" << std::endl;
-            alex::coutLock.unlock();
-            abort();
-          }
-          alex::coutLock.unlock();
-        }
       }
+      else {
+        //NEED TO HANDLE READ FAILURE CASE
+        alex::coutLock.lock();
+        std::cout << "t" << thread_id << " - ";
+        std::cout << "failed finding payload." << std::endl;
+        if (strict_read) {
+          std::cout << "aborting" << std::endl;
+          alex::coutLock.unlock();
+          abort();
+        }
+        alex::coutLock.unlock();
+      }
+      
       read_cnt++;
     }
   }
