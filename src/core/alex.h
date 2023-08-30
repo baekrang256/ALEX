@@ -1994,20 +1994,9 @@ public:
       return {Iterator(nullptr, 0), false, nullptr};
     } 
     
-    leaf->unused.lock();
-    model_node_type *parent = leaf->parent_;
-    memory_fence();
-#if DEBUG_PRINT
-    alex::coutLock.lock();
-    std::cout << "t" << worker_id << " - in final, decided to insert at bucketID : "
-              << traversal_path.back().bucketID << std::endl;
-    alex::coutLock.unlock();
-#endif
-    if (leaf->unused.val_) {
-      //this leaf is about to be substituted.
-      //retry later
-      leaf->unused.unlock();
-      memory_fence();
+    model_node_type *parent = traversal_path.back().node;
+    if (pthread_mutex_trylock(&leaf->insert_mutex)) {
+      //failed obtaining mutex
       rcu_progress(worker_id);
 #if PROFILE
       auto insert_from_parent_end_time = std::chrono::high_resolution_clock::now();
@@ -2031,6 +2020,12 @@ public:
 #endif
       return {Iterator(nullptr, 1), false, parent};
     }
+#if DEBUG_PRINT
+    alex::coutLock.lock();
+    std::cout << "t" << worker_id << " - in final, decided to insert at bucketID : "
+              << traversal_path.back().bucketID << std::endl;
+    alex::coutLock.unlock();
+#endif
 
     // Nonzero fail flag means that the insert did not happen
     std::pair<std::pair<int, int>, std::pair<data_node_type *, data_node_type *>> ret 
@@ -2042,7 +2037,7 @@ public:
 
     if (fail == -1) {
       // Duplicate found and duplicates not allowed
-      leaf->unused.unlock();
+      pthread_mutex_unlock(&leaf->insert_mutex);
       memory_fence();
       rcu_progress(worker_id);
       return {Iterator(leaf, insert_pos), false, nullptr};
@@ -2054,7 +2049,7 @@ public:
       std::cout << "alex.h insert : succeeded insertion and processing" << std::endl;
       alex::coutLock.unlock();
 #endif
-      leaf->unused.unlock();
+      pthread_mutex_unlock(&leaf->insert_mutex);
       memory_fence();
       num_keys.increment();
       rcu_progress(worker_id);
@@ -2082,10 +2077,6 @@ public:
     }
     else {
       //need to modify
-      leaf->unused = 1;
-      memory_fence();
-      leaf->unused.unlock();
-      memory_fence();
 
       if (fail == 4) { //need to expand
         expandParam *param = new expandParam();
@@ -2177,11 +2168,7 @@ public:
 #endif
 
     //will use the original data node!
-    leaf->unused.lock();
-    memory_fence();
-    leaf->unused.val_ = 0;
-    memory_fence();
-    leaf->unused.unlock();
+    pthread_mutex_unlock(&leaf->insert_mutex);
     memory_fence();
     delete Eparam;
     pthread_exit(nullptr);
@@ -2248,11 +2235,7 @@ public:
       leaf->expected_avg_shifts_ = tree_node.expected_avg_shifts;
       leaf->reset_stats();
 
-      leaf->unused.lock();
-      memory_fence();
-      leaf->unused.val_ = 0;
-      memory_fence();
-      leaf->unused.unlock();
+      pthread_mutex_unlock(&leaf->insert_mutex);
       memory_fence();
 #if DEBUG_PRINT
       alex::coutLock.lock();

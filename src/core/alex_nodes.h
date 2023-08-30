@@ -406,8 +406,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   AV* data_slots_ = nullptr;  // holds key-payload pairs
 #endif
 
-  AtomicVal<P> unused = AtomicVal<P>(0); // whether data node exists in alex or is about to be removed.
-  pthread_rwlock_t key_array_rw_lock = PTHREAD_RWLOCK_INITIALIZER;
+  pthread_mutex_t insert_mutex = PTHREAD_MUTEX_INITIALIZER;
+  pthread_rwlock_t key_array_rw_lock = PTHREAD_RWLOCK_INITIALIZER; 
 
   /* Below are unused attributes */
   //unsigned int max_key_length_ = 1; // maximum length of each key 
@@ -546,6 +546,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     delete[] the_max_key_arr_;
     delete[] the_min_key_arr_;
     pthread_rwlock_destroy(&key_array_rw_lock);
+    pthread_mutex_destroy(&insert_mutex);
   }
 
   AlexDataNode(self_type& other)
