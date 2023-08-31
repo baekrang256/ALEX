@@ -487,7 +487,7 @@ void *run_fg(void *param) {
         insert_cnt++;
       }
     }
-    else {//is leaf
+    else {//is read
       alex::AlexKey<KEY_TYPE> key = lookup_keys[std::get<1>(op_param)];
 #if DEBUG_PRINT
       alex::coutLock.lock();

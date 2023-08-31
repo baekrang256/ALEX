@@ -421,16 +421,6 @@ class LinearModelBuilder {
   std::vector<double> positions_;
 };
 
-/** model building for fanout **/
-template <class T, class V>
-void build_model_fanout(LinearModel<T> *model, V *values, int num_keys, int fanout) {
-  LinearModelBuilder<T> model_builder(model);
-  for (int i = 0; i < values; i++) {
-    model_builder.add(values[i].first, (double) i / (num_keys - 1));
-  }
-  model_builder.build();
-}
-
 /*** Comparison ***/
 
 struct AlexCompare {
@@ -749,6 +739,15 @@ struct ProfileStats {
   std::atomic<bgStatType> find_best_fanout_existing_node_time,
                           max_find_best_fanout_existing_node_time,
                           min_find_best_fanout_existing_node_time;
+  std::atomic<bgStatType> fanout_model_train_time,
+                          max_fanout_model_train_time,
+                          min_fanout_model_train_time;
+  std::atomic<bgStatType> fanout_data_train_time,
+                          max_fanout_data_train_time,
+                          min_fanout_data_train_time;
+  std::atomic<bgStatType> fanout_batch_stat_time,
+                          max_fanout_batch_stat_time,
+                          min_fanout_batch_stat_time;
   std::atomic<bgStatType> split_downwards_time,
                           max_split_downwards_time,
                           min_split_downwards_time;
@@ -786,6 +785,9 @@ struct ProfileStats {
   //for background threads
   std::atomic<uint64_t> resize_call_cnt;
   std::atomic<uint64_t> find_best_fanout_existing_node_call_cnt;
+  std::atomic<uint64_t> fanout_model_train_cnt;
+  std::atomic<uint64_t> fanout_data_train_cnt;
+  std::atomic<uint64_t> fanout_batch_stat_cnt;
   std::atomic<uint64_t> split_downwards_call_cnt;
   std::atomic<uint64_t> split_sideways_call_cnt;
   //AtomicVal<uint64_t> create_two_new_data_nodes_call_cnt;
@@ -954,6 +956,18 @@ struct ProfileStats {
     max_find_best_fanout_existing_node_time = std::numeric_limits<bgStatType>::min();
     min_find_best_fanout_existing_node_time = std::numeric_limits<bgStatType>::max();
 
+    fanout_model_train_time = 0;
+    max_fanout_model_train_time = std::numeric_limits<bgStatType>::min();
+    min_fanout_model_train_time = std::numeric_limits<bgStatType>::max();
+
+    fanout_data_train_time = 0;
+    max_fanout_data_train_time = std::numeric_limits<bgStatType>::min();
+    min_fanout_data_train_time = std::numeric_limits<bgStatType>::max();
+
+    fanout_batch_stat_time = 0;
+    max_fanout_batch_stat_time = std::numeric_limits<bgStatType>::min();
+    min_fanout_batch_stat_time = std::numeric_limits<bgStatType>::max();
+
     split_downwards_time = 0;
     max_split_downwards_time = std::numeric_limits<bgStatType>::min();
     min_split_downwards_time = std::numeric_limits<bgStatType>::max();
@@ -966,6 +980,9 @@ struct ProfileStats {
 
     resize_call_cnt = 0;
     find_best_fanout_existing_node_call_cnt = 0;
+    fanout_model_train_cnt = 0;
+    fanout_data_train_cnt = 0;
+    fanout_batch_stat_cnt = 0;
     split_downwards_call_cnt = 0;
     split_sideways_call_cnt = 0;
     lock_achieve_cnt = 0;
@@ -1377,6 +1394,9 @@ struct ProfileStats {
     std::cout << "-countings-\n"
               << "resize_call_cnt : " << resize_call_cnt << '\n'
               << "find_best_fanout_existing_node_call_cnt : " << find_best_fanout_existing_node_call_cnt << '\n'
+              << "fanout_model_train_cnt : " << fanout_model_train_cnt << '\n'
+              << "fanout_data_train_cnt : " << fanout_data_train_cnt << '\n'
+              << "fanout_batch_stat_cnt : " << fanout_batch_stat_cnt << '\n'
               << "split_downwards_call_cnt : " << split_downwards_call_cnt << '\n'
               << "split_sideways_call_cnt : " << split_sideways_call_cnt << "\n\n";
     
@@ -1384,6 +1404,12 @@ struct ProfileStats {
               << "resize_time : " << (resize_call_cnt ? resize_time / resize_call_cnt : 0) << '\n'
               << "find_best_fanout_existing_node_time : " << (find_best_fanout_existing_node_call_cnt ?
                   find_best_fanout_existing_node_time / find_best_fanout_existing_node_call_cnt : 0) << '\n'
+              << "fanout_model_train_time : " << (fanout_model_train_cnt ? 
+                  fanout_model_train_time / fanout_model_train_cnt : 0) << '\n'
+              << "fanout_data_train_time : " << (fanout_data_train_cnt ?
+                  fanout_data_train_time / fanout_data_train_cnt : 0) << '\n'
+              << "fanout_batch_stat_time : " << (fanout_batch_stat_cnt ?
+                  fanout_batch_stat_time / fanout_batch_stat_cnt : 0) << '\n'
               << "split_downwards_time : " << (split_downwards_call_cnt ?
                   split_downwards_time / split_downwards_call_cnt : 0) << '\n'
               << "split_sideways_time : " << (split_sideways_call_cnt ? 
@@ -1392,12 +1418,18 @@ struct ProfileStats {
     std::cout << "-max time-\n"
               << "resize_time : " << max_resize_time << '\n'
               << "find_best_fanout_existing_node_time : " << max_find_best_fanout_existing_node_time << '\n'
+              << "fanout_model_train_time : " << max_fanout_model_train_time << '\n'
+              << "fanout_data_train_time : " << max_fanout_data_train_time << '\n'
+              << "fanout_batch_stat_time : " << max_fanout_batch_stat_time << '\n'
               << "split_downwards_time : " << max_split_downwards_time << '\n'
               << "split_sideways_time : " << max_split_sideways_time << "\n\n";
     
     std::cout << "-min time-\n"
               << "resize_time : " << min_resize_time << '\n'
               << "find_best_fanout_existing_node_time : " << min_find_best_fanout_existing_node_time << '\n'
+              << "fanout_model_train_time : " << min_fanout_model_train_time << '\n'
+              << "fanout_data_train_time : " << min_fanout_data_train_time << '\n'
+              << "fanout_batch_stat_time : " << min_fanout_batch_stat_time << '\n'
               << "split_downwards_time : " << min_split_downwards_time << '\n'
               << "split_sideways_time : " << min_split_sideways_time << "\n\n";
 

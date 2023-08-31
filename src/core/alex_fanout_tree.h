@@ -371,12 +371,12 @@ int find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
 
     /* For each fanout we make corresponding model for string keys
      * by doing model building. Process is similar to bulk_load_node. */
-    typedef typename AlexDataNode<T, P>::iterator_type iterator;
+    typedef typename AlexDataNode<T, P>::const_iterator_type iterator;
     LinearModel<T> tmp_model(base_model.max_key_length_);
     LinearModelBuilder<T> tmp_model_builder(&tmp_model);
     iterator it(node, 0);
       
-    int key_cnt = 0;
+    size_t key_cnt = 0;
 #if DEBUG_PRINT
     //alex::coutLock.lock();
     //std::cout << "t" << worker_id << " - ";
@@ -396,7 +396,20 @@ int find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
     //alex::coutLock.unlock();
 #endif
     }
+#if PROFILE
+    auto fanout_model_train_start_time = std::chrono::high_resolution_clock::now();
+    profileStats.fanout_model_train_cnt++;
+#endif
     tmp_model_builder.build();
+#if PROFILE
+    auto fanout_model_train_end_time = std::chrono::high_resolution_clock::now();
+    auto elapsed_time = std::chrono::duration_cast<std::chrono::bgTimeUnit>(fanout_model_train_end_time - fanout_model_train_start_time).count();
+    profileStats.fanout_model_train_time += elapsed_time;
+    profileStats.max_fanout_model_train_time =
+      std::max(profileStats.max_fanout_model_train_time.load(), elapsed_time);
+    profileStats.min_fanout_model_train_time =
+      std::min(profileStats.min_fanout_model_train_time.load(), elapsed_time);
+#endif
     std::copy(tmp_model.a_, tmp_model.a_ + tmp_model.max_key_length_, a);
     b = tmp_model.b_;
 
@@ -411,9 +424,13 @@ int find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
 
     int left_boundary = 0;
     int right_boundary = 0;
+#if PROFILE
+      auto fanout_batch_stat_start_time = std::chrono::high_resolution_clock::now();
+      profileStats.fanout_batch_stat_cnt++;
+#endif
     for (int i = 0; i < fanout; i++) {
       left_boundary = right_boundary;
-      typename AlexDataNode<T, P>::const_iterator_type it(node, left_boundary);
+      it = typename AlexDataNode<T, P>::const_iterator_type(node, left_boundary);
       if (i == fanout - 1) {right_boundary = node->data_capacity_;}
       else {
         /* string key */
@@ -445,8 +462,20 @@ int find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
         builder.add(it.key(), j);
         num_actual_keys++;
       }
+#if PROFILE
+      auto fanout_data_train_start_time = std::chrono::high_resolution_clock::now();
+      profileStats.fanout_data_train_cnt++;
+#endif
       builder.build();
-
+#if PROFILE
+      auto fanout_data_train_end_time = std::chrono::high_resolution_clock::now();
+      auto data_elapsed_time = std::chrono::duration_cast<std::chrono::bgTimeUnit>(fanout_data_train_end_time - fanout_data_train_start_time).count();
+      profileStats.fanout_data_train_time += data_elapsed_time;
+      profileStats.max_fanout_data_train_time =
+        std::max(profileStats.max_fanout_data_train_time.load(), data_elapsed_time);
+      profileStats.min_fanout_data_train_time =
+        std::min(profileStats.min_fanout_data_train_time.load(), data_elapsed_time);
+#endif
       double empirical_insert_frac = node->frac_inserts();
       DataNodeStats stats;
       double node_cost =
@@ -471,6 +500,15 @@ int find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
       //alex::coutLock.unlock();
 #endif
     }
+#if PROFILE
+      auto fanout_batch_stat_end_time = std::chrono::high_resolution_clock::now();
+      auto batch_elapsed_time = std::chrono::duration_cast<std::chrono::bgTimeUnit>(fanout_batch_stat_end_time - fanout_batch_stat_start_time).count();
+      profileStats.fanout_batch_stat_time += batch_elapsed_time;
+      profileStats.max_fanout_batch_stat_time =
+        std::max(profileStats.max_fanout_batch_stat_time.load(), batch_elapsed_time);
+      profileStats.min_fanout_batch_stat_time =
+        std::min(profileStats.min_fanout_batch_stat_time.load(), batch_elapsed_time);
+#endif
     // model weight reflects that it has global effect, not local effect
     double traversal_cost =
         kNodeLookupsWeight +
