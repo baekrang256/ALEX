@@ -393,11 +393,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   typedef Iterator<> iterator_type;
   typedef Iterator<const self_type, const P, const V> const_iterator_type;
 
-  AtomicVal<self_type*> next_leaf_ = AtomicVal<self_type*>(nullptr);
-  AtomicVal<self_type*> prev_leaf_ = AtomicVal<self_type*>(nullptr);
-  AtomicVal<self_type*> pending_left_leaf_ = AtomicVal<self_type*>(nullptr);
-  AtomicVal<self_type*> pending_right_leaf_ = AtomicVal<self_type*>(nullptr);
-
 #if ALEX_DATA_NODE_SEP_ARRAYS
   AlexKey<T>* key_slots_ = nullptr;  // holds keys
   P* payload_slots_ =
@@ -581,9 +576,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     std::copy(other.the_min_key_arr_, other.the_min_key_arr_ + other.max_key_length_,
         the_min_key_arr_);
     kEndSentinel_ = other.kEndSentinel_;
-
-    prev_leaf_.val_ = other.prev_leaf_.val_;
-    next_leaf_.val_ = other.next_leaf_.val_;
 
 #if ALEX_DATA_NODE_SEP_ARRAYS
     key_slots_ = new AlexKey<T>[other.data_capacity_]();

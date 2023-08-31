@@ -1118,60 +1118,6 @@ EmptyNodeStart:
   // Returns maximum key in the index
   T *get_max_key() const { return last_data_node()->last_key(); }
 
-  // Link all data nodes together. Used after bulk loading.
-  void link_all_data_nodes() {
-    data_node_type* prev_leaf = nullptr;
-    for (NodeIterator node_it = NodeIterator(this); !node_it.is_end();
-         node_it.next()) {
-      node_type* cur = node_it.current();
-      if (cur->is_leaf_) {
-        auto node = static_cast<data_node_type*>(cur);
-        if (prev_leaf != nullptr) {
-          prev_leaf->next_leaf_.val_ = node;
-          node->prev_leaf_.val_ = prev_leaf;
-        }
-        prev_leaf = node;
-      }
-    }
-  }
-
-  // Link the new data nodes together when old data node is replaced by two new
-  // data nodes.
-  void link_data_nodes(data_node_type* old_leaf,
-                       data_node_type* left_leaf, data_node_type* right_leaf) {
-    data_node_type *old_leaf_prev_leaf = old_leaf->prev_leaf_.read();
-    data_node_type *old_leaf_next_leaf = old_leaf->next_leaf_.read();
-    if (old_leaf_prev_leaf != nullptr) {
-      data_node_type *olpl_pending_rl = old_leaf_prev_leaf->pending_right_leaf_.read();
-      if (olpl_pending_rl != nullptr) {
-        olpl_pending_rl->next_leaf_.update(left_leaf);
-        left_leaf->prev_leaf_.update(olpl_pending_rl);
-      }
-      else {
-        old_leaf_prev_leaf->next_leaf_.update(left_leaf);
-        left_leaf->prev_leaf_.update(old_leaf_prev_leaf);
-      }
-    }
-    else {
-      left_leaf->prev_leaf_.update(nullptr);
-    }
-    left_leaf->next_leaf_.update(right_leaf);
-    right_leaf->prev_leaf_.update(left_leaf);
-    if (old_leaf_next_leaf != nullptr) {
-      data_node_type *olnl_pending_ll = old_leaf_next_leaf->pending_left_leaf_.read();
-      if (olnl_pending_ll != nullptr) {
-        olnl_pending_ll->prev_leaf_.update(right_leaf);
-        right_leaf->next_leaf_.update(olnl_pending_ll);
-      }
-      else {
-        old_leaf_next_leaf->prev_leaf_.update(right_leaf);
-        right_leaf->next_leaf_.update(old_leaf_next_leaf);
-      }
-    }
-    else {
-      right_leaf->next_leaf_.update(nullptr);
-    }
-  }
 
   /*** Allocators and comparators ***/
 
@@ -1273,7 +1219,6 @@ EmptyNodeStart:
 
     create_superroot();
     update_superroot_key_domain();
-    link_all_data_nodes();
 
 #if DEBUG_PRINT
     //std::cout << "structure's min_key after bln : " << istats_.key_domain_min_ << std::endl;
@@ -1839,32 +1784,6 @@ public:
     }
   }
 
-  // Looks for the last key no greater than the input value
-  // Conceptually, this is equal to the last key before upper_bound()
-  // returns end iterator on error
-  // WARNING : iterator may cause error if other threads are also operating on ALEX
-  // NOTE : the user should adequately call rcu_progress with thread_id for proper progress
-  //        or use it when no other thread is working on ALEX.
-  typename self_type::Iterator find_last_no_greater_than(const AlexKey<T>& key) {
-    data_node_type* leaf = get_leaf(key, 0);
-    if (leaf == nullptr) {return end();}
-    const int idx = leaf->upper_bound(key) - 1;
-    if (idx >= 0) {
-      return Iterator(leaf, idx);
-    }
-
-    // Edge case: need to check previous data node(s)
-    while (true) {
-      if (leaf->prev_leaf_.val_ == nullptr) {
-        return Iterator(leaf, 0);
-      }
-      leaf = leaf->prev_leaf_.val_;
-      if (leaf->num_keys_ > 0) {
-        return Iterator(leaf, leaf->last_pos());
-      }
-    }
-  }
-
   typename self_type::Iterator begin() {
     node_type* cur = root_node_;
 
@@ -2185,14 +2104,7 @@ public:
 #if DEBUG_PRINT
     alex::coutLock.lock();
     std::cout << "t" << worker_id << " - failed and made a thread to modify node\n";
-    std::cout << "parent is : " << parent << std::endl;
-    alex::coutLock.unlock();
-#endif
-    auto start_time = std::chrono::high_resolution_clock::now();
-
-#if DEBUG_PRINT
-    alex::coutLock.lock();
-    std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
+    std::cout << "parent is : " << parent << '\n';
     std::cout << "bucketID : " << bucketID << std::endl;
     alex::coutLock.unlock();
 #endif
@@ -2204,16 +2116,6 @@ public:
           leaf, this_ptr->num_keys.read(), used_fanout_tree_nodes, 2, worker_id);
               
     int best_fanout = 1 << fanout_tree_depth;
-    auto cur_time = std::chrono::high_resolution_clock::now();
-
-#if DEBUG_PRINT
-    alex::coutLock.lock();
-    std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
-    std::cout << "best fanout computation took "
-              << std::chrono::duration_cast<std::chrono::nanoseconds>(cur_time - start_time).count()
-              << "ns" << std::endl;
-    alex::coutLock.unlock();
-#endif
 
     if (fanout_tree_depth == 0) {
 #if DEBUG_PRINT
@@ -2273,18 +2175,7 @@ public:
         split_sideways(parent, bucketID, fanout_tree_depth, used_fanout_tree_nodes,
                        reuse_model, worker_id, this_ptr);
       }
-#if DEBUG_PRINT
-      alex::coutLock.lock();
-      std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - "
-                << "alex.h split sideways/downwards took : "
-                << std::chrono::duration_cast<std::chrono::nanoseconds>(
-                   std::chrono::high_resolution_clock::now() - cur_time).count() << "ns\n";
-      std::cout << std::flush;
-      alex::coutLock.unlock();
-#endif
     }
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto duration = end_time - start_time;
 
     //empty used_fanout_tree_nodes for preventing memory leakage.
     for (fanout_tree::FTNode& tree_node : used_fanout_tree_nodes) {delete[] tree_node.a;}
@@ -2595,7 +2486,6 @@ public:
 #endif
     parent->children_.val_ = parent_new_children;
     parent->children_.unlock();
-    this_ptr->link_data_nodes(old_node, left_leaf, right_leaf);
 #if DEBUG_PRINT
     //alex::coutLock.lock();
     //std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
@@ -2641,20 +2531,11 @@ public:
     std::cout << "starting bucket is" << start_bucketID << std::endl;
     alex::coutLock.unlock();
 #endif
-    data_node_type* prev_leaf =
-        old_node->prev_leaf_.read();  // used for linking the new data nodes
-#if DEBUG_PRINT
-    alex::coutLock.lock();
-    std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
-    std::cout << "initial prev_leaf is : " << prev_leaf << std::endl;
-    alex::coutLock.unlock();
-#endif
     int left_boundary = 0;
     int right_boundary = 0;
     // Keys may be re-assigned to an adjacent fanout tree node due to off-by-one
     // errors
     int num_reassigned_keys = 0;
-    int first_iter = 1;
     parent->children_.lock();
     child_elem_type *parent_old_children = parent->children_.val_;
     child_elem_type *parent_new_children = new child_elem_type[parent->num_children_];
@@ -2699,47 +2580,12 @@ public:
       child_node->expected_avg_exp_search_iterations_ =
           tree_node.expected_avg_search_iterations;
       child_node->expected_avg_shifts_ = tree_node.expected_avg_shifts;
-
-      if (first_iter) { //left leaf is not a new data node
-        old_node->pending_left_leaf_.update(child_node);
 #if DEBUG_PRINT
         //alex::coutLock.lock();
         //std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
         //std::cout << "updated pll with " << child_node << std::endl;
         //alex::coutLock.unlock();
 #endif
-        if (prev_leaf != nullptr) {
-          data_node_type *prev_leaf_pending_rl = prev_leaf->pending_right_leaf_.read();
-          if (prev_leaf_pending_rl != nullptr) {
-            child_node->prev_leaf_.update(prev_leaf_pending_rl);
-            prev_leaf_pending_rl->next_leaf_.update(child_node);
-          }
-          else {
-#if DEBUG_PRINT
-            alex::coutLock.lock();
-            std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
-            std::cout << "child_node's prev_leaf_ is " << prev_leaf << std::endl;
-            alex::coutLock.unlock();
-#endif
-            child_node->prev_leaf_.update(prev_leaf);
-            prev_leaf->next_leaf_.update(child_node);
-          }
-        }
-        else {
-          child_node->prev_leaf_.update(nullptr);
-        }
-        first_iter = 0;
-      }
-      else {
-#if DEBUG_PRINT
-        alex::coutLock.lock();
-        std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
-        std::cout << "child_node's prev_leaf_ is " << prev_leaf << std::endl;
-        alex::coutLock.unlock();
-#endif
-        child_node->prev_leaf_.update(prev_leaf);
-        prev_leaf->next_leaf_.update(child_node);
-      }
       child_node->parent_ = parent;
 
       //update model node metadata
@@ -2748,7 +2594,6 @@ public:
         parent_new_children[i].duplication_factor_ = child_node->duplication_factor_;
       }
       cur += child_node_repeats;
-      prev_leaf = child_node;
 #if DEBUG_PRINT
       alex::coutLock.lock();
       std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
@@ -2773,30 +2618,11 @@ public:
     parent->children_.val_ = parent_new_children;
     parent->children_.unlock();
 
-    //update right-most leaf's next/prev leaf.
-    old_node->pending_right_leaf_.update(prev_leaf);
 #if DEBUG_PRINT
     //alex::coutLock.lock();
     //std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
     //std::cout << "updated prl with " << prev_leaf << std::endl;
     //alex::coutLock.unlock();
-#endif
-    data_node_type *next_leaf = old_node->next_leaf_.read();
-    if (next_leaf != nullptr) {
-      data_node_type *next_leaf_pending_ll = next_leaf->pending_left_leaf_.read();
-      if (next_leaf_pending_ll != nullptr) {
-        prev_leaf->next_leaf_.update(next_leaf_pending_ll);
-        next_leaf_pending_ll->prev_leaf_.update(prev_leaf);
-      }
-      else {
-        prev_leaf->next_leaf_.update(next_leaf);
-        next_leaf->prev_leaf_.update(prev_leaf);
-      }
-    }
-    else {
-      prev_leaf->next_leaf_.update(nullptr);
-    }
-#if DEBUG_PRINT
     alex::coutLock.lock();
     std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
     std::cout << "finished create_new_dn" << std::endl;
@@ -2841,108 +2667,6 @@ public:
       size += node_it.current()->node_size();
     }
     return size;
-  }
-
-  /*** Debugging ***/
-
- public:
-  // If short_circuit is true, then we stop validating after detecting the first
-  // invalid property
-  bool validate_structure(bool validate_data_nodes = false,
-                          bool short_circuit = false) const {
-    bool is_valid = true;
-    std::stack<node_type*> node_stack;
-    node_type* cur;
-    node_stack.push(root_node_);
-
-    while (!node_stack.empty()) {
-      cur = node_stack.top();
-      node_stack.pop();
-
-      if (!cur->is_leaf_) {
-        auto node = static_cast<model_node_type*>(cur);
-        if (!node->validate_structure(true)) {
-          std::cout << "[Model node invalid structure]"
-                    << " node addr: " << node
-                    << ", node level: " << node->level_ << std::endl;
-          if (short_circuit) {
-            return false;
-          } else {
-            is_valid = false;
-          }
-        }
-
-        node_stack.push(node->children_[node->num_children_ - 1].node_ptr_);
-        for (int i = node->num_children_ - 2; i >= 0; i--) {
-          if (node->children_[i].node_ptr_ != node->children_[i + 1].node_ptr_) {
-            node_stack.push(node->children_[i].node_ptr_);
-          }
-        }
-      } else {
-        if (validate_data_nodes) {
-          auto node = static_cast<data_node_type*>(cur);
-          if (!node->validate_structure(true)) {
-            std::cout << "[Data node invalid structure]"
-                      << " node addr: " << node
-                      << ", node level: " << node->level_ << std::endl;
-            if (short_circuit) {
-              return false;
-            } else {
-              is_valid = false;
-            }
-          }
-          if (node->num_keys_ > 0) {
-            data_node_type* prev_nonempty_leaf = node->prev_leaf_.read();
-            while (prev_nonempty_leaf != nullptr &&
-                   prev_nonempty_leaf->num_keys_ == 0) {
-              prev_nonempty_leaf = prev_nonempty_leaf->prev_leaf_.read();;
-            }
-            if (prev_nonempty_leaf) {
-              AlexKey<T> last_in_prev_leaf = prev_nonempty_leaf->last_key();
-              AlexKey<T> first_in_cur_leaf = node->first_key();
-              if (!Compare(last_in_prev_leaf, first_in_cur_leaf)) {
-                std::cout
-                    << "[Data node keys not in sorted order with prev node]"
-                    << " node addr: " << node
-                    << ", node level: " << node->level_
-                    << ", last in prev leaf: " << last_in_prev_leaf
-                    << ", first in cur leaf: " << first_in_cur_leaf
-                    << std::endl;
-                if (short_circuit) {
-                  return false;
-                } else {
-                  is_valid = false;
-                }
-              }
-            }
-            data_node_type* next_nonempty_leaf = node->next_leaf_;
-            while (next_nonempty_leaf != nullptr &&
-                   next_nonempty_leaf->num_keys_ == 0) {
-              next_nonempty_leaf = next_nonempty_leaf->next_leaf_;
-            }
-            if (next_nonempty_leaf) {
-              AlexKey<T> first_in_next_leaf = next_nonempty_leaf->first_key();
-              AlexKey<T> last_in_cur_leaf = node->last_key();
-              if (!Compare(last_in_cur_leaf, first_in_next_leaf)) {
-                std::cout
-                    << "[Data node keys not in sorted order with next node]"
-                    << " node addr: " << node
-                    << ", node level: " << node->level_
-                    << ", last in cur leaf: " << last_in_cur_leaf
-                    << ", first in next leaf: " << first_in_next_leaf
-                    << std::endl;
-                if (short_circuit) {
-                  return false;
-                } else {
-                  is_valid = false;
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-    return is_valid;
   }
 
   /*** Iterators ***/
@@ -3177,247 +2901,6 @@ public:
       uint64_t bit = extract_rightmost_one(cur_bitmap_data_);
       cur_idx_ = get_offset(cur_bitmap_idx_, bit);
       cur_bitmap_data_ = remove_rightmost_one(cur_bitmap_data_);
-    }
-  };
-
-  class ReverseIterator {
-   public:
-    data_node_type* cur_leaf_ = nullptr;  // current data node
-    int cur_idx_ = 0;         // current position in key/data_slots of data node
-    int cur_bitmap_idx_ = 0;  // current position in bitmap
-    uint64_t cur_bitmap_data_ = 0;  // caches the relevant data in the current
-                                    // bitmap position
-
-    ReverseIterator() {}
-
-    ReverseIterator(data_node_type* leaf, int idx)
-        : cur_leaf_(leaf), cur_idx_(idx) {
-      initialize();
-    }
-
-    ReverseIterator(const ReverseIterator& other)
-        : cur_leaf_(other.cur_leaf_),
-          cur_idx_(other.cur_idx_),
-          cur_bitmap_idx_(other.cur_bitmap_idx_),
-          cur_bitmap_data_(other.cur_bitmap_data_) {}
-
-    ReverseIterator(const Iterator& other)
-        : cur_leaf_(other.cur_leaf_), cur_idx_(other.cur_idx_) {
-      initialize();
-    }
-
-    ReverseIterator& operator=(const ReverseIterator& other) {
-      if (this != &other) {
-        cur_idx_ = other.cur_idx_;
-        cur_leaf_ = other.cur_leaf_;
-        cur_bitmap_idx_ = other.cur_bitmap_idx_;
-        cur_bitmap_data_ = other.cur_bitmap_data_;
-      }
-      return *this;
-    }
-
-    ReverseIterator& operator++() {
-      advance();
-      return *this;
-    }
-
-    ReverseIterator operator++(int) {
-      ReverseIterator tmp = *this;
-      advance();
-      return tmp;
-    }
-
-#if ALEX_DATA_NODE_SEP_ARRAYS
-    // Does not return a reference because keys and payloads are stored
-    // separately.
-    // If possible, use key() and payload() instead.
-    V operator*() const {
-      return std::make_pair(cur_leaf_->key_slots_[cur_idx_],
-                            cur_leaf_->payload_slots_[cur_idx_]);
-    }
-#else
-    // If data node stores key-payload pairs contiguously, return reference to V
-    V& operator*() const { return cur_leaf_->data_slots_[cur_idx_]; }
-#endif
-
-    const AlexKey<T>& key() const { return cur_leaf_->get_key(cur_idx_); }
-
-    P& payload() const { return cur_leaf_->get_payload(cur_idx_); }
-
-    bool is_end() const { return cur_leaf_ == nullptr; }
-
-    bool operator==(const ReverseIterator& rhs) const {
-      return cur_idx_ == rhs.cur_idx_ && cur_leaf_ == rhs.cur_leaf_;
-    }
-
-    bool operator!=(const ReverseIterator& rhs) const {
-      return !(*this == rhs);
-    };
-
-   private:
-    void initialize() {
-      if (!cur_leaf_) return;
-      assert(cur_idx_ >= 0);
-      if (cur_idx_ >= cur_leaf_->data_capacity_) {
-        cur_leaf_ = cur_leaf_->next_leaf_;
-        cur_idx_ = 0;
-        if (!cur_leaf_) return;
-      }
-
-      cur_bitmap_idx_ = cur_idx_ >> 6;
-      cur_bitmap_data_ = cur_leaf_->bitmap_[cur_bitmap_idx_];
-
-      // Zero out extra bits
-      int bit_pos = cur_idx_ - (cur_bitmap_idx_ << 6);
-      cur_bitmap_data_ &= (1ULL << bit_pos) | ((1ULL << bit_pos) - 1);
-
-      advance();
-    }
-
-    forceinline void advance() {
-      while (cur_bitmap_data_ == 0) {
-        cur_bitmap_idx_--;
-        if (cur_bitmap_idx_ < 0) {
-          cur_leaf_ = cur_leaf_->prev_leaf_.read();
-          if (cur_leaf_ == nullptr) {
-            cur_idx_ = 0;
-            return;
-          }
-          cur_idx_ = cur_leaf_->data_capacity_ - 1;
-          cur_bitmap_idx_ = cur_leaf_->bitmap_size_ - 1;
-        }
-        cur_bitmap_data_ = cur_leaf_->bitmap_[cur_bitmap_idx_];
-      }
-      assert(cpu_supports_bmi());
-      int bit_pos = static_cast<int>(63 - _lzcnt_u64(cur_bitmap_data_));
-      cur_idx_ = (cur_bitmap_idx_ << 6) + bit_pos;
-      cur_bitmap_data_ &= ~(1ULL << bit_pos);
-    }
-  };
-
-  class ConstReverseIterator {
-   public:
-    const data_node_type* cur_leaf_ = nullptr;  // current data node
-    int cur_idx_ = 0;         // current position in key/data_slots of data node
-    int cur_bitmap_idx_ = 0;  // current position in bitmap
-    uint64_t cur_bitmap_data_ = 0;  // caches the relevant data in the current
-                                    // bitmap position
-
-    ConstReverseIterator() {}
-
-    ConstReverseIterator(const data_node_type* leaf, int idx)
-        : cur_leaf_(leaf), cur_idx_(idx) {
-      initialize();
-    }
-
-    ConstReverseIterator(const ConstReverseIterator& other)
-        : cur_leaf_(other.cur_leaf_),
-          cur_idx_(other.cur_idx_),
-          cur_bitmap_idx_(other.cur_bitmap_idx_),
-          cur_bitmap_data_(other.cur_bitmap_data_) {}
-
-    ConstReverseIterator(const ReverseIterator& other)
-        : cur_leaf_(other.cur_leaf_),
-          cur_idx_(other.cur_idx_),
-          cur_bitmap_idx_(other.cur_bitmap_idx_),
-          cur_bitmap_data_(other.cur_bitmap_data_) {}
-
-    ConstReverseIterator(const Iterator& other)
-        : cur_leaf_(other.cur_leaf_), cur_idx_(other.cur_idx_) {
-      initialize();
-    }
-
-    ConstReverseIterator(const ConstIterator& other)
-        : cur_leaf_(other.cur_leaf_), cur_idx_(other.cur_idx_) {
-      initialize();
-    }
-
-    ConstReverseIterator& operator=(const ConstReverseIterator& other) {
-      if (this != &other) {
-        cur_idx_ = other.cur_idx_;
-        cur_leaf_ = other.cur_leaf_;
-        cur_bitmap_idx_ = other.cur_bitmap_idx_;
-        cur_bitmap_data_ = other.cur_bitmap_data_;
-      }
-      return *this;
-    }
-
-    ConstReverseIterator& operator++() {
-      advance();
-      return *this;
-    }
-
-    ConstReverseIterator operator++(int) {
-      ConstReverseIterator tmp = *this;
-      advance();
-      return tmp;
-    }
-
-#if ALEX_DATA_NODE_SEP_ARRAYS
-    // Does not return a reference because keys and payloads are stored
-    // separately.
-    // If possible, use key() and payload() instead.
-    V operator*() const {
-      return std::make_pair(cur_leaf_->key_slots_[cur_idx_],
-                            cur_leaf_->payload_slots_[cur_idx_]);
-    }
-#else
-    // If data node stores key-payload pairs contiguously, return reference to V
-    const V& operator*() const { return cur_leaf_->data_slots_[cur_idx_]; }
-#endif
-
-    const AlexKey<T>& key() const { return cur_leaf_->get_key(cur_idx_); }
-
-    const P& payload() const { return cur_leaf_->get_payload(cur_idx_); }
-
-    bool is_end() const { return cur_leaf_ == nullptr; }
-
-    bool operator==(const ConstReverseIterator& rhs) const {
-      return cur_idx_ == rhs.cur_idx_ && cur_leaf_ == rhs.cur_leaf_;
-    }
-
-    bool operator!=(const ConstReverseIterator& rhs) const {
-      return !(*this == rhs);
-    };
-
-   private:
-    void initialize() {
-      if (!cur_leaf_) return;
-      assert(cur_idx_ >= 0);
-      if (cur_idx_ >= cur_leaf_->data_capacity_) {
-        cur_leaf_ = cur_leaf_->next_leaf_;
-        cur_idx_ = 0;
-        if (!cur_leaf_) return;
-      }
-
-      cur_bitmap_idx_ = cur_idx_ >> 6;
-      cur_bitmap_data_ = cur_leaf_->bitmap_[cur_bitmap_idx_];
-
-      // Zero out extra bits
-      int bit_pos = cur_idx_ - (cur_bitmap_idx_ << 6);
-      cur_bitmap_data_ &= (1ULL << bit_pos) | ((1ULL << bit_pos) - 1);
-
-      advance();
-    }
-
-    forceinline void advance() {
-      while (cur_bitmap_data_ == 0) {
-        cur_bitmap_idx_--;
-        if (cur_bitmap_idx_ < 0) {
-          cur_leaf_ = cur_leaf_->prev_leaf_.read();
-          if (cur_leaf_ == nullptr) {
-            cur_idx_ = 0;
-            return;
-          }
-          cur_idx_ = cur_leaf_->data_capacity_ - 1;
-          cur_bitmap_idx_ = cur_leaf_->bitmap_size_ - 1;
-        }
-        cur_bitmap_data_ = cur_leaf_->bitmap_[cur_bitmap_idx_];
-      }
-      assert(cpu_supports_bmi());
-      int bit_pos = static_cast<int>(63 - _lzcnt_u64(cur_bitmap_data_));
-      cur_idx_ = (cur_bitmap_idx_ << 6) + bit_pos;
-      cur_bitmap_data_ &= ~(1ULL << bit_pos);
     }
   };
 
