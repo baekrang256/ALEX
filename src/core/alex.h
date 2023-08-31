@@ -2185,14 +2185,7 @@ public:
 #if DEBUG_PRINT
     alex::coutLock.lock();
     std::cout << "t" << worker_id << " - failed and made a thread to modify node\n";
-    std::cout << "parent is : " << parent << std::endl;
-    alex::coutLock.unlock();
-#endif
-    auto start_time = std::chrono::high_resolution_clock::now();
-
-#if DEBUG_PRINT
-    alex::coutLock.lock();
-    std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
+    std::cout << "parent is : " << parent << '\n'
     std::cout << "bucketID : " << bucketID << std::endl;
     alex::coutLock.unlock();
 #endif
@@ -2204,16 +2197,6 @@ public:
           leaf, this_ptr->num_keys.read(), used_fanout_tree_nodes, 2, worker_id);
               
     int best_fanout = 1 << fanout_tree_depth;
-    auto cur_time = std::chrono::high_resolution_clock::now();
-
-#if DEBUG_PRINT
-    alex::coutLock.lock();
-    std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
-    std::cout << "best fanout computation took "
-              << std::chrono::duration_cast<std::chrono::nanoseconds>(cur_time - start_time).count()
-              << "ns" << std::endl;
-    alex::coutLock.unlock();
-#endif
 
     if (fanout_tree_depth == 0) {
 #if DEBUG_PRINT
@@ -2235,15 +2218,6 @@ public:
 
       pthread_mutex_unlock(&leaf->insert_mutex);
       memory_fence();
-#if DEBUG_PRINT
-      alex::coutLock.lock();
-      std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - "
-                << "alex.h expanded data node\nexpansion took : "
-                << std::chrono::duration_cast<std::chrono::nanoseconds>(
-                   std::chrono::high_resolution_clock::now() - cur_time).count() << "ns\n";
-      std::cout << std::flush;
-      alex::coutLock.unlock();
-#endif
     } else {
       bool reuse_model = (fail == 3);
       // either split sideways or downwards
@@ -2273,18 +2247,7 @@ public:
         split_sideways(parent, bucketID, fanout_tree_depth, used_fanout_tree_nodes,
                        reuse_model, worker_id, this_ptr);
       }
-#if DEBUG_PRINT
-      alex::coutLock.lock();
-      std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - "
-                << "alex.h split sideways/downwards took : "
-                << std::chrono::duration_cast<std::chrono::nanoseconds>(
-                   std::chrono::high_resolution_clock::now() - cur_time).count() << "ns\n";
-      std::cout << std::flush;
-      alex::coutLock.unlock();
-#endif
     }
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto duration = end_time - start_time;
 
     //empty used_fanout_tree_nodes for preventing memory leakage.
     for (fanout_tree::FTNode& tree_node : used_fanout_tree_nodes) {delete[] tree_node.a;}
