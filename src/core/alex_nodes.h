@@ -2033,39 +2033,41 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     AV* new_data_slots = new (atomic_value_allocator().allocate(new_data_capacity))
         AV[new_data_capacity];
 #endif
+    LinearModel<T> new_model(this->max_key_length_);
+    std::copy(this->model_.a_, this->model_.a_ + this->max_key_length_, new_model.a_);
+    new_model.b_ = this->model_.b_;
+    
 
     // Retrain model if the number of keys is sufficiently small (under 50)
-    pthread_rwlock_wrlock(&key_array_rw_lock); //since it's now altering data node model
     if (num_keys_ < 50 || force_retrain) {
       const_iterator_type it(this, 0);
-      LinearModelBuilder<T> builder(&(this->model_));
+      LinearModelBuilder<T> builder(&(new_model));
       for (int i = 0; it.cur_idx_ < data_capacity_ && !it.is_end(); it++, i++) {
         builder.add(it.key(), i);
       }
       builder.build();
       if (keep_left) {
-        this->model_.expand(static_cast<double>(data_capacity_) / num_keys_);
+        new_model.expand(static_cast<double>(data_capacity_) / num_keys_);
       } else if (keep_right) {
-        this->model_.expand(static_cast<double>(data_capacity_) / num_keys_);
-        this->model_.b_ += (new_data_capacity - data_capacity_);
+        new_model.expand(static_cast<double>(data_capacity_) / num_keys_);
+        new_model.b_ += (new_data_capacity - data_capacity_);
       } else {
-        this->model_.expand(static_cast<double>(new_data_capacity) / num_keys_);
+        new_model.expand(static_cast<double>(new_data_capacity) / num_keys_);
       }
     } else {
       if (keep_right) {
-        this->model_.b_ += (new_data_capacity - data_capacity_);
+        new_model.b_ += (new_data_capacity - data_capacity_);
       } else if (!keep_left) {
-        this->model_.expand(static_cast<double>(new_data_capacity) /
+        new_model.expand(static_cast<double>(new_data_capacity) /
                             data_capacity_);
       }
     }
-    pthread_rwlock_unlock(&key_array_rw_lock);
 
     int last_position = -1;
     int keys_remaining = num_keys_;
     const_iterator_type it(this, 0);
     for (; it.cur_idx_ < data_capacity_ && !it.is_end(); it++) {
-      int position = this->model_.predict(it.key());
+      int position = new_model.predict(it.key());
       position = std::max<int>(position, last_position + 1);
 
       int positions_remaining = new_data_capacity - position;
@@ -2145,6 +2147,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
                           static_cast<double>(num_keys_ + 1)),
                  static_cast<double>(data_capacity_));
     contraction_threshold_ = data_capacity_ * kMinDensity_;
+    this->model_ = new_model;
     pthread_rwlock_unlock(&key_array_rw_lock);
 
 #if PROFILE
