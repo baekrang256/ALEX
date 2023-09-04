@@ -1952,32 +1952,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     //std::cout << "alex_nodes.h - expected_avg_shifts_ : " << expected_avg_shifts_ << std::endl;
     //alex::coutLock.unlock();
 #endif
-    if (num_inserts_ % 64 == 0 && catastrophic_cost()) {
-      return {{2, -1}, {this, nullptr}};
-    }
-
-    self_type *resized_data_node = nullptr;
-    // Check if node is full (based on expansion_threshold)
-    if (num_keys_ >= expansion_threshold_) {
-      if (significant_cost_deviation()) {
-        return {{1, -1}, {this, nullptr}};
-      }
-      if (catastrophic_cost()) {
-        return {{2, -1}, {this, nullptr}};
-      }
-      if (num_keys_ > max_slots_ * kMinDensity_) {
-        return {{3, -1}, {this, nullptr}};
-      }
-#if DEBUG_PRINT
-      //alex::coutLock.lock();
-      //std::cout << "t" << worker_id << " - ";
-      //std::cout << "alex_nodes.h insert : resizing data node" << std::endl;
-      //alex::coutLock.unlock();
-#endif
-      //notify that it should expand.
-      return {{4, -1}, {this, nullptr}};
-    }
-
     int insertion_position = -1;
 #if DEBUG_PRINT
     alex::coutLock.lock();
@@ -2003,7 +1977,32 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     num_keys_++;
     num_inserts_++;
     
-    return {{0, insertion_position}, {this, resized_data_node}};
+    if (num_inserts_ % 64 == 0 && catastrophic_cost()) {
+      return {{2, insertion_position}, {this, nullptr}};
+    }
+
+    self_type *resized_data_node = nullptr;
+    // Check if node is full (based on expansion_threshold)
+    if (num_keys_ >= expansion_threshold_) {
+      if (significant_cost_deviation()) {
+        return {{1, insertion_position}, {this, nullptr}};
+      }
+      if (catastrophic_cost()) {
+        return {{2, insertion_position}, {this, nullptr}};
+      }
+      if (num_keys_ > max_slots_ * kMinDensity_) {
+        return {{3, insertion_position}, {this, nullptr}};
+      }
+#if DEBUG_PRINT
+      //alex::coutLock.lock();
+      //std::cout << "t" << worker_id << " - ";
+      //std::cout << "alex_nodes.h insert : resizing data node" << std::endl;
+      //alex::coutLock.unlock();
+#endif
+      //notify that it should expand.
+      return {{4, insertion_position}, {this, nullptr}};
+    }
+    return {{0, insertion_position}, {this, nullptr}};
   }
 
   // Resize the data node to the target density

@@ -338,7 +338,7 @@ std::pair<int, double> find_best_fanout_bottom_up(
 // loading.
 // Returns the depth of the best fanout tree.
 template <class T, class P>
-int find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
+std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
                                    std::vector<FTNode>& used_fanout_tree_nodes, int max_fanout,
                                    uint32_t worker_id) {
   // Repeatedly add levels to the fanout tree until the overall cost of each
@@ -349,6 +349,7 @@ int find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
 #endif
   int num_keys = node->num_keys_;
   int best_level = 0;
+  double *best_param = new double[node->max_key_length_ + 1];
   double best_cost = std::numeric_limits<double>::max();
   std::vector<double> fanout_costs;
   std::vector<std::vector<FTNode>> fanout_tree;
@@ -528,6 +529,8 @@ int find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
     if (cost < best_cost) {
       best_cost = cost;
       best_level = fanout_tree_level;
+      std::copy(a, a + node->max_key_length_, best_param);
+      best_param[node->max_key_length_] = b;
     }
     fanout_tree.push_back(new_level);
 
@@ -571,7 +574,7 @@ int find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
     std::min(profileStats.min_find_best_fanout_existing_node_time.load(), elapsed_time);
 #endif
     
-  return best_level;
+  return {best_level, best_param};
 }
 
 }  // namespace fanout_tree

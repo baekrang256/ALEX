@@ -2040,7 +2040,7 @@ public:
       rcu_progress(worker_id);
       return {Iterator(leaf, insert_pos), false, nullptr};
     }
-    else if (!fail) {//succeded in first try without expansion.
+    else if (!fail) {//succeded without modification
 #if DEBUG_PRINT
       alex::coutLock.lock();
       std::cout << "t" << worker_id << " - ";
@@ -2073,9 +2073,7 @@ public:
 #endif
       return {Iterator(leaf, insert_pos), true, nullptr}; //iterator could be invalid.
     }
-    else {
-      //need to modify
-
+    else { //succeeded, but needs to modify
       if (fail == 4) { //need to expand
         expandParam *param = new expandParam();
         param->leaf = leaf;
@@ -2107,24 +2105,24 @@ public:
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_from_parent_end_time - insert_from_parent_start_time).count();
 
       if (last_parent == superroot_) {
-        profileStats.insert_from_superroot_fail_time[worker_id] += elapsed_time;
-        profileStats.insert_superroot_fail_cnt[worker_id]++;
-        profileStats.max_insert_from_superroot_fail_time[worker_id] =
-          std::max(profileStats.max_insert_from_superroot_fail_time[worker_id], elapsed_time);
-        profileStats.min_insert_from_superroot_fail_time[worker_id] =
-          std::min(profileStats.min_insert_from_superroot_fail_time[worker_id], elapsed_time);
+        profileStats.insert_from_superroot_success_time[worker_id] += elapsed_time;
+        profileStats.insert_superroot_success_cnt[worker_id]++;
+        profileStats.max_insert_from_superroot_success_time[worker_id] =
+          std::max(profileStats.max_insert_from_superroot_success_time[worker_id], elapsed_time);
+        profileStats.min_insert_from_superroot_success_time[worker_id] =
+          std::min(profileStats.min_insert_from_superroot_success_time[worker_id], elapsed_time);
       }
       else {
-        profileStats.insert_from_parent_fail_time[worker_id] += elapsed_time;
-        profileStats.insert_directp_fail_cnt[worker_id]++;
-        profileStats.max_insert_from_parent_fail_time[worker_id] =
-          std::max(profileStats.max_insert_from_parent_fail_time[worker_id], elapsed_time);
-        profileStats.min_insert_from_parent_fail_time[worker_id] =
-          std::min(profileStats.min_insert_from_parent_fail_time[worker_id], elapsed_time);
+        profileStats.insert_from_parent_success_time[worker_id] += elapsed_time;
+        profileStats.insert_directp_success_cnt[worker_id]++;
+        profileStats.max_insert_from_parent_success_time[worker_id] =
+          std::max(profileStats.max_insert_from_parent_success_time[worker_id], elapsed_time);
+        profileStats.min_insert_from_parent_success_time[worker_id] =
+          std::min(profileStats.min_insert_from_parent_success_time[worker_id], elapsed_time);
       }
 #endif
 
-      return {Iterator(nullptr, 1), false, parent};
+      return {Iterator(leaf, insert_pos), true, nullptr}; //iterator could be invalid.
     }
   }
 
@@ -2193,8 +2191,11 @@ public:
     std::vector<fanout_tree::FTNode> used_fanout_tree_nodes;
 
     int fanout_tree_depth = 1;
-    fanout_tree_depth = fanout_tree::find_best_fanout_existing_node<T, P>(
+    double *model_param = nullptr;
+    auto ret = fanout_tree::find_best_fanout_existing_node<T, P>(
           leaf, this_ptr->num_keys.read(), used_fanout_tree_nodes, 2, worker_id);
+    fanout_tree_depth = ret.first;
+    model_param = ret.second;
               
     int best_fanout = 1 << fanout_tree_depth;
 
@@ -2235,7 +2236,7 @@ public:
         std::cout << "failed and decided to split downwards" << std::endl;
         alex::coutLock.unlock();
 #endif
-        split_downwards(parent, bucketID, fanout_tree_depth, used_fanout_tree_nodes,
+        split_downwards(parent, bucketID, fanout_tree_depth, model_param, used_fanout_tree_nodes,
                                  reuse_model, worker_id, this_ptr);
       } else {
 #if DEBUG_PRINT
@@ -2248,6 +2249,8 @@ public:
                        reuse_model, worker_id, this_ptr);
       }
     }
+
+    delete[] ret.second;
 
     //empty used_fanout_tree_nodes for preventing memory leakage.
     for (fanout_tree::FTNode& tree_node : used_fanout_tree_nodes) {delete[] tree_node.a;}
@@ -2262,7 +2265,7 @@ public:
   // If no fanout tree is provided, then splits downward in two. Returns the
   // newly created model node.
   static void split_downwards(
-      model_node_type* parent, int bucketID, int fanout_tree_depth,
+      model_node_type* parent, int bucketID, int fanout_tree_depth, double *model_param,
       std::vector<fanout_tree::FTNode>& used_fanout_tree_nodes,
       bool reuse_model, uint32_t worker_id, self_type *this_ptr) {
 #if PROFILE
@@ -2304,23 +2307,8 @@ public:
     int end_bucketID =
         start_bucketID + repeats;  // first bucket with different child
 
-    //make an iterator, and add them all into the model
-    //and train to make it have an output of [0, fanout]
-    LinearModel<T> tmp_model(this_ptr->max_key_length_);
-    LinearModelBuilder<T> tmp_model_builder(&tmp_model);
-    Iterator it(leaf, 0);
-
-    int key_cnt = 0;
-    while(it.cur_idx_ != -1) {
-      //std::cout << it.key().key_arr_ << std::endl;
-      tmp_model_builder.add(it.key(), ((double) key_cnt * fanout / (leaf->num_keys_ - 1)));
-      key_cnt++;
-      it++;
-      if (it.cur_leaf_ != leaf) {break;} //moved out to next node.
-    }
-    tmp_model_builder.build();
-    std::copy(tmp_model.a_, tmp_model.a_ + tmp_model.max_key_length_, new_node->model_.a_);
-    new_node->model_.b_ = tmp_model.b_;
+    std::copy(model_param, model_param + new_node->max_key_length_, new_node->model_.a_);
+    new_node->model_.b_ = model_param[new_node->max_key_length_];
 
 #if DEBUG_PRINT
     //alex::coutLock.lock();
