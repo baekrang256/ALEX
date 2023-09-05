@@ -136,7 +136,8 @@ class AlexNode {
 template <class T, class P, class Alloc = std::allocator<std::pair<AlexKey<T>, P>>>
 class AlexModelNode : public AlexNode<T, P, Alloc> {
  public:
-  AtomicVal<AlexNode<T, P, Alloc>**>children_ = AtomicVal<AlexNode<T, P, Alloc>**>(nullptr);
+  AlexNode<T, P, Alloc>**children_ = nullptr;
+  pthread_rwlock_t children_rw_lock_ = PTHREAD_RWLOCK_INITIALIZER; 
   int num_children_ = 0;
 
   typedef AlexNode<T, P, Alloc> basic_node_type;
@@ -169,16 +170,17 @@ class AlexModelNode : public AlexNode<T, P, Alloc> {
       }
 
   ~AlexModelNode() {
-    delete children_.val_;
+    delete children_;
     delete this->max_key_.val_;
     delete this->min_key_.val_;
+    pthread_rwlock_destroy(&children_rw_lock_);
   }
 
   AlexModelNode(const self_type& other)
       : AlexNode<T, P, Alloc>(other),
         allocator_(other.allocator_),
         num_children_(other.num_children_) {
-    children_.val_ = new basic_node_type *[other.num_children_];
+    children_ = new basic_node_type *[other.num_children_];
     std::copy(other.children_.val_, 
               other.children_.val_ + other.num_children_,
               children_.val_);
@@ -195,11 +197,11 @@ class AlexModelNode : public AlexNode<T, P, Alloc> {
 
     allocator_ = other.allocator_;
 
-    delete children_.val_;
-    children_.val_ = new basic_node_type*[other.num_children_];
-    std::copy(other.children_.val_, 
-              other.children_.val_ + other.num_children_, 
-              children_.val_);
+    delete children_;
+    children_ = new basic_node_type*[other.num_children_];
+    std::copy(other.children_, 
+              other.children_ + other.num_children_, 
+              children_);
     num_children_ = other.num_children_;
   }
 

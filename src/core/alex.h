@@ -488,8 +488,8 @@ class Alex {
     while (true) {
       auto node = static_cast<model_node_type*>(cur);
 Initialization:
-      node_type **cur_children = node->children_.read();
-      node_type **prev_children = nullptr;
+      pthread_rwlock_rdlock(&(node->children_rw_lock_));
+      node_type **cur_children = node->children_;
       int num_children = node->num_children_;
       double bucketID_prediction = node->model_.predict_double(key);
       int bucketID = static_cast<int>(bucketID_prediction);
@@ -619,30 +619,14 @@ Initialization:
           bucketID = bucketID - (bucketID % cur_duplication_factor);
           if (bucketID == 0) {break;} //leftest node. we start from here.
           bucketID -= 1;
-          rcu_progress(worker_id);
-          prev_children = cur_children;
-          cur_children = node->children_.read();
-          if (prev_children != cur_children) {
-            //metadata changed -> model node structure changed
-            //restart search according to new model
-#if DEBUG_PRINT
-            alex::coutLock.lock();
-            std::cout << "t" << worker_id << " - ";
-            std::cout << "metadata changed, restarting insertion." << std::endl;
-            alex::coutLock.unlock();
-#endif
-            rcu_progress(worker_id);
-            goto Initialization;
-          }
-          else { //continue with same metadata.
-            cur = cur_children[bucketID]; 
-            memory_fence();
-            cur_duplication_factor = 1 << cur->duplication_factor_;
-            memory_fence();
-            cur_node_min_key = cur->min_key_.read();
-            memory_fence();
-            cur_node_max_key = cur->max_key_.read();
-            memory_fence();
+          cur = cur_children[bucketID]; 
+          memory_fence();
+          cur_duplication_factor = 1 << cur->duplication_factor_;
+          memory_fence();
+          cur_node_min_key = cur->min_key_.read();
+          memory_fence();
+          cur_node_max_key = cur->max_key_.read();
+          memory_fence();
 #if DEBUG_PRINT
             //alex::coutLock.lock();
             //std::cout << "t" << worker_id << " - ";
@@ -650,9 +634,8 @@ Initialization:
             //          << cur_node_min_key->key_arr_ << " " << cur_node_max_key->key_arr_ << std::endl;
             //alex::coutLock.unlock();
 #endif
-            smaller_than_min = key_less_(key, *(cur_node_min_key));
-            larger_than_max = key_less_(*(cur_node_max_key), key);
-          }
+          smaller_than_min = key_less_(key, *(cur_node_min_key));
+          larger_than_max = key_less_(*(cur_node_max_key), key);
         }
 #if DEBUG_PRINT
         //alex::coutLock.lock();
@@ -704,21 +687,6 @@ Initialization:
               cur->max_key_.unlock();
               rcu_barrier(worker_id);
               delete old_max_key;
-              //when calling rcu_barrier our original leaf node could have changed to new leaf node.
-              //we should check it, and if it changed... we should do the whole search again(...)
-              prev_children = cur_children;
-              cur_children = node->children_.read();
-              node_type *after_rcu_cur_next = cur_children[cur_bucketID];
-              if (after_rcu_cur_next != cur) {
-#if DEBUG_PRINT
-                alex::coutLock.lock();
-                std::cout << "t" << worker_id << " - ";
-                std::cout << "metadata changed" << std::endl;
-                alex::coutLock.unlock();
-#endif
-                rcu_progress(worker_id);
-                goto Initialization;
-              }
               bucketID = cur_bucketID;
               break;
             }
@@ -789,23 +757,7 @@ EmptyNodeStart:
                 rcu_barrier(worker_id);
                 delete old_max_key;
                 delete old_min_key;
-
-                //when calling rcu_barrier our original leaf node could have changed to new leaf node.
-                //we should check it, and if it changed... we should do the whole search again(...)
-                prev_children = cur_children;
-                cur_children = node->children_.read();
-                node_type *after_rcu_cur_next = cur_children[cur_next_bucketID];
-                if (after_rcu_cur_next != cur_next) {
-#if DEBUG_PRINT
-                  alex::coutLock.lock();
-                  std::cout << "t" << worker_id << " - ";
-                  std::cout << "metadata changed" << std::endl;
-                  alex::coutLock.unlock();
-#endif
-                  rcu_progress(worker_id);
-                  goto Initialization;
-                }
-                cur = after_rcu_cur_next;
+                cur = cur_next;
                 bucketID = cur_next_bucketID;
                 break;
               }
@@ -880,22 +832,7 @@ EmptyNodeStart:
                 rcu_barrier(worker_id);
                 delete old_max_key;
                 delete old_min_key;
-                //when calling rcu_barrier, our original leaf node could have changed to new leaf node.
-                //we should check it, and if it changed... we should do the whole search again(...)
-                prev_children = cur_children;
-                cur_children = node->children_.read();
-                node_type *after_rcu_cur_next = cur_children[cur_next_bucketID];
-                if (after_rcu_cur_next != cur_next) {
-#if DEBUG_PRINT
-                  alex::coutLock.lock();
-                  std::cout << "t" << worker_id << " - ";
-                  std::cout << "metadata changed" << std::endl;
-                  alex::coutLock.unlock();
-#endif
-                  rcu_progress(worker_id);
-                  goto Initialization;
-                }
-                cur = after_rcu_cur_next;
+                cur = cur_next;
                 bucketID = cur_next_bucketID;
                 break;
               }
@@ -958,22 +895,6 @@ EmptyNodeStart:
               cur_next->max_key_.unlock();
               rcu_barrier(worker_id);
               delete old_max_key;
-              //when calling rcu_barrier, our original leaf node could have changed to new leaf node.
-              //we should check it, and if it changed... we should do the whole search again(...)
-              prev_children = cur_children;
-              cur_children = node->children_.read();
-              node_type *after_rcu_cur = cur_children[cur_bucketID];
-              if (after_rcu_cur != cur) {
-#if DEBUG_PRINT
-                alex::coutLock.lock();
-                std::cout << "t" << worker_id << " - ";
-                std::cout << "node changed" << std::endl;
-                alex::coutLock.unlock();
-#endif
-                rcu_progress(worker_id);
-                goto Initialization;
-              }
-              cur = after_rcu_cur;
               bucketID = cur_bucketID;
 #if DEBUG_PRINT
               //alex::coutLock.lock();
@@ -1033,6 +954,8 @@ EmptyNodeStart:
       if (traversal_path) {
         traversal_path->push_back({node, bucketID});
       }
+
+      pthread_rwlock_unlock(&(node->children_rw_lock_));
 
       if (cur->is_leaf_) {
         // we don't do rcu_progress here, since we are entering data node.
@@ -1094,7 +1017,7 @@ EmptyNodeStart:
     node_type* cur = root_node_;
 
     while (!cur->is_leaf_) {
-      cur = static_cast<model_node_type*>(cur)->children_.val_[0];
+      cur = static_cast<model_node_type*>(cur)->children_[0];
     }
     return static_cast<data_node_type*>(cur);
   }
@@ -1105,7 +1028,7 @@ EmptyNodeStart:
 
     while (!cur->is_leaf_) {
       auto node = static_cast<model_node_type*>(cur);
-      cur = node->children_.val_[node->num_children_ - 1];
+      cur = node->children_[node->num_children_ - 1];
     }
     return static_cast<data_node_type*>(cur);
   }
@@ -1287,7 +1210,7 @@ EmptyNodeStart:
     superroot_ = new (model_node_allocator().allocate(1))
         model_node_type(static_cast<short>(root_node_->level_ - 1), nullptr, max_key_length_, allocator_);
     superroot_->num_children_ = 1;
-    superroot_->children_.val_ = new node_type*[1];
+    superroot_->children_ = new node_type*[1];
     root_node_->parent_ = superroot_;
     update_superroot_pointer();
   }
@@ -1379,7 +1302,7 @@ EmptyNodeStart:
   }
 
   void update_superroot_pointer() {
-    superroot_->children_.val_[0] = root_node_;
+    superroot_->children_[0] = root_node_;
     superroot_->level_ = static_cast<short>(root_node_->level_ - 1);
   }
 
@@ -1504,7 +1427,7 @@ EmptyNodeStart:
       model_node->model_.b_ = tmp_model.b_; 
       
       model_node->num_children_ = fanout;
-      model_node->children_.val_ = new node_type*[fanout];
+      model_node->children_ = new node_type*[fanout];
 
       // Instantiate all the child nodes and recurse
       int cur = 0;
@@ -1575,24 +1498,24 @@ EmptyNodeStart:
         //std::cout << "right prediction result (bln) " << child_node->model_.predict_double(AlexKey<T>(right_key, max_key_length_)) << std::endl;
 #endif
 
-        model_node->children_.val_[cur] = child_node;
+        model_node->children_[cur] = child_node;
         LinearModel<T> child_data_node_model(tree_node.a, tree_node.b, max_key_length_);
         bulk_load_node(values + tree_node.left_boundary,
                        tree_node.right_boundary - tree_node.left_boundary,
-                       model_node->children_.val_[cur], model_node, total_keys,
+                       model_node->children_[cur], model_node, total_keys,
                        &child_data_node_model);
-        model_node->children_.val_[cur]->duplication_factor_ =
+        model_node->children_[cur]->duplication_factor_ =
             static_cast<uint8_t>(best_fanout_tree_depth - tree_node.level);
         
-        if (model_node->children_.val_[cur]->is_leaf_) {
-          static_cast<data_node_type*>(model_node->children_.val_[cur])
+        if (model_node->children_[cur]->is_leaf_) {
+          static_cast<data_node_type*>(model_node->children_[cur])
               ->expected_avg_exp_search_iterations_ =
               tree_node.expected_avg_search_iterations;
-          static_cast<data_node_type*>(model_node->children_.val_[cur])
+          static_cast<data_node_type*>(model_node->children_[cur])
               ->expected_avg_shifts_ = tree_node.expected_avg_shifts;
         }
         for (int i = cur + 1; i < cur + repeats; i++) {
-          model_node->children_.val_[i] = model_node->children_.val_[cur];
+          model_node->children_[i] = model_node->children_[cur];
         }
         cur += repeats;
       }
@@ -1608,9 +1531,9 @@ EmptyNodeStart:
       std::cout << "min_key_(model_node) : " << model_node->min_key_.val_->key_arr_ << '\n';
       std::cout << "max_key_(model_node) : " << model_node->max_key_.val_->key_arr_ << '\n';
       for (int i = 0; i < fanout; i++) {
-        std::cout << i << "'s initial pointer value is : " << model_node->children_.val_[i] << '\n';
-        std::cout << i << "'s min_key is : " << model_node->children_.val_[i]->min_key_.val_->key_arr_ << '\n';
-        std::cout << i << "'s max_key is : " << model_node->children_.val_[i]->max_key_.val_->key_arr_ << '\n';
+        std::cout << i << "'s initial pointer value is : " << model_node->children_[i] << '\n';
+        std::cout << i << "'s min_key is : " << model_node->children_[i]->min_key_.val_->key_arr_ << '\n';
+        std::cout << i << "'s max_key is : " << model_node->children_[i]->max_key_.val_->key_arr_ << '\n';
       }
       std::cout << std::flush;
 #endif
@@ -2271,8 +2194,7 @@ public:
     std::cout << "...bucketID : " << bucketID << std::endl;
     alex::coutLock.unlock();
 #endif
-    node_type **parent_children_ = parent->children_.read();
-    auto leaf = static_cast<data_node_type*> (parent_children_[bucketID]);
+    auto leaf = static_cast<data_node_type*> (parent->children_[bucketID]);
 #if DEBUG_PRINT
     alex::coutLock.lock();
     std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
@@ -2286,7 +2208,7 @@ public:
         model_node_type(leaf->level_, parent, this_ptr->max_key_length_, this_ptr->allocator_);
     new_node->duplication_factor_ = leaf->duplication_factor_;
     new_node->num_children_ = fanout;
-    new_node->children_.val_ = new node_type*[fanout];
+    new_node->children_ = new node_type*[fanout];
     //needs to initialize min/max key in case of split_downwards.
     std::copy(leaf->min_key_.val_->key_arr_, leaf->min_key_.val_->key_arr_ + leaf->max_key_length_,
               new_node->min_key_.val_->key_arr_);
@@ -2310,26 +2232,21 @@ public:
     //std::cout << "right prediction result (sd) " << new_node->model_.predict_double(leaf->key_slots_[leaf->last_pos()]) << std::endl;
     //alex::coutLock.unlock();
 #endif
-    node_type **switched_children;
 
     // Create new data nodes
     if (used_fanout_tree_nodes.empty()) {
       assert(fanout_tree_depth == 1);
-      switched_children = create_two_new_data_nodes(leaf, new_node, fanout_tree_depth,
+      create_two_new_data_nodes(leaf, new_node, fanout_tree_depth,
                                                     reuse_model, worker_id, this_ptr);
     } else {
-      switched_children = create_new_data_nodes(leaf, new_node, fanout_tree_depth,
+      create_new_data_nodes(leaf, new_node, fanout_tree_depth,
                             used_fanout_tree_nodes, worker_id, this_ptr);
     }
 
     //substitute pointers in parent model node
-    parent->children_.lock();
-    node_type **parent_new_children = new node_type*[parent->num_children_];
-    node_type **parent_old_children = parent->children_.val_;
-    std::copy(parent_old_children, parent_old_children + parent->num_children_,
-              parent_new_children);
+    pthread_rwlock_wrlock(&(parent->children_rw_lock_));
     for (int i = start_bucketID; i < end_bucketID; i++) {
-      parent_new_children[i] = new_node;
+      parent->children_[i] = new_node;
     }
 #if DEBUG_PRINT
     alex::coutLock.lock();
@@ -2338,25 +2255,19 @@ public:
     for (int i = 0; i < parent->num_children_; i++) {
       std::cout << i << " : " << parent_new_children[i] << '\n';
     }
-    std::cout << std::flush;
-    alex::coutLock.unlock();
-#endif
-    parent->children_.val_ = parent_new_children;
-#if DEBUG_PRINT
-    alex::coutLock.lock();
     std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
     std::cout << "min_key_(model_node) : " << new_node->min_key_.val_->key_arr_ << '\n';
     std::cout << "max_key_(model_node) : " << new_node->max_key_.val_->key_arr_ << '\n';
     for (int i = 0; i < fanout; i++) {
         std::cout << i << "'s min_key is : "
-                  << new_node->children_.val_[i]->min_key_.val_->key_arr_ << '\n';
+                  << new_node->children_[i]->min_key_.val_->key_arr_ << '\n';
         std::cout << i << "'s max_key is : " 
-                  << new_node->children_.val_[i]->max_key_.val_->key_arr_ << '\n';
+                  << new_node->children_[i]->max_key_.val_->key_arr_ << '\n';
     }
     std::cout << std::flush;
     alex::coutLock.unlock();
 #endif
-    parent->children_.unlock();
+    pthread_rwlock_unlock(&(parent->children_rw_lock_));
     if (parent == this_ptr->superroot_) {
 #if DEBUG_PRINT
       alex::coutLock.lock();
@@ -2370,8 +2281,6 @@ public:
     //destroy unused leaf and metadata after waiting.
     rcu_barrier();
     this_ptr->delete_node(leaf);
-    delete parent_old_children;
-    delete switched_children;
 #if PROFILE
     auto split_downwards_end_time = std::chrono::high_resolution_clock::now();
     auto elapsed_time = std::chrono::duration_cast<std::chrono::bgTimeUnit>(split_downwards_end_time - split_downwards_start_time).count();
@@ -2393,7 +2302,7 @@ public:
     profileStats.split_sideways_call_cnt++;
     auto split_sideways_start_time = std::chrono::high_resolution_clock::now();
 #endif
-    auto leaf = static_cast<data_node_type*>((parent->children_.read())[bucketID]);
+    auto leaf = static_cast<data_node_type*>(parent->children_[bucketID]);
 
     int fanout = 1 << fanout_tree_depth;
     int repeats = 1 << leaf->duplication_factor_;
@@ -2404,29 +2313,24 @@ public:
     }
     int start_bucketID =
         bucketID - (bucketID % repeats);  // first bucket with same child
-    
-    node_type **parent_old_children;
 
     if (used_fanout_tree_nodes.empty()) {
       assert(fanout_tree_depth == 1);
-      parent_old_children = create_two_new_data_nodes(
-          leaf, parent,
-          std::max(fanout_tree_depth,
-                   static_cast<int>(leaf->duplication_factor_)),
+      create_two_new_data_nodes(leaf, parent,
+          std::max(fanout_tree_depth, static_cast<int>(leaf->duplication_factor_)),
           reuse_model, worker_id, this_ptr, start_bucketID);
     } else {
       // Extra duplication factor is required when there are more redundant
       // pointers than necessary
       int extra_duplication_factor =
           std::max(0, leaf->duplication_factor_ - fanout_tree_depth);
-      parent_old_children = create_new_data_nodes(leaf, parent, fanout_tree_depth,
+      create_new_data_nodes(leaf, parent, fanout_tree_depth,
                             used_fanout_tree_nodes, worker_id, this_ptr,
                             start_bucketID, extra_duplication_factor);
     }
 
     rcu_barrier();
     this_ptr->delete_node(leaf);
-    delete parent_old_children;
 #if PROFILE
     auto split_sideways_end_time = std::chrono::high_resolution_clock::now();
     auto elapsed_time = std::chrono::duration_cast<std::chrono::bgTimeUnit>(split_sideways_end_time - split_sideways_start_time).count();
@@ -2445,7 +2349,7 @@ public:
   // duplication_factor denotes how many child pointer slots were assigned to
   // the old data node.
   // returns destroy needed old meta data.
-  static node_type ** create_two_new_data_nodes(data_node_type* old_node,
+  static void create_two_new_data_nodes(data_node_type* old_node,
                                  model_node_type* parent, int duplication_factor, 
                                  bool reuse_model, uint32_t worker_id,
                                  self_type *this_ptr, int start_bucketID = 0) {
@@ -2511,16 +2415,12 @@ public:
     left_leaf->parent_ = parent;
     right_leaf->parent_ = parent;
 
-    parent->children_.lock();
-    node_type **parent_new_children = new node_type*[parent->num_children_];
-    node_type **parent_old_children = parent->children_.val_;
-    std::copy(parent_old_children, parent_old_children + parent->num_children_,
-              parent_new_children);
+    pthread_rwlock_wrlock(&(parent->children_rw_lock_));
     for (int i = start_bucketID; i < mid_bucketID; i++) {
-      parent_new_children[i] = left_leaf;
+      parent->children_[i] = left_leaf;
     }
     for (int i = mid_bucketID; i < end_bucketID; i++) {
-      parent_new_children[i] = right_leaf;
+      parent->children_[i] = right_leaf;
     }
 #if DEBUG_PRINT
       alex::coutLock.lock();
@@ -2534,8 +2434,7 @@ public:
                 << std::endl;
       alex::coutLock.unlock();
 #endif
-    parent->children_.val_ = parent_new_children;
-    parent->children_.unlock();
+    pthread_rwlock_unlock(&(parent->children_rw_lock_));
     this_ptr->link_data_nodes(old_node, left_leaf, right_leaf);
 #if DEBUG_PRINT
     //alex::coutLock.lock();
@@ -2543,8 +2442,6 @@ public:
     //std::cout << "finished create_two_new_dn" << std::endl;
     //alex::coutLock.unlock();
 #endif
-
-    return parent_old_children;
   }
 
   // Create new data nodes from the keys in the old data node according to the
@@ -2553,7 +2450,7 @@ public:
   // and link the new data nodes together.
   // Helper for splitting when using a fanout tree.
   // returns destroy needed old meta data.
- static node_type **create_new_data_nodes(
+ static void create_new_data_nodes(
       data_node_type* old_node, model_node_type* parent,
       int fanout_tree_depth, std::vector<fanout_tree::FTNode>& used_fanout_tree_nodes,
       uint32_t worker_id, self_type *this_ptr, 
@@ -2576,6 +2473,7 @@ public:
 
     // Create the new data nodes
     int cur = start_bucketID;  // first bucket with same child
+    std::vector<std::pair<node_type *, int>> generated_nodes;
 #if DEBUG_PRINT
     alex::coutLock.lock();
     std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
@@ -2596,11 +2494,6 @@ public:
     // errors
     int num_reassigned_keys = 0;
     int first_iter = 1;
-    parent->children_.lock();
-    node_type **parent_old_children = parent->children_.val_;
-    node_type **parent_new_children = new node_type*[parent->num_children_];
-    std::copy(parent_old_children, parent_old_children + parent->num_children_,
-              parent_new_children);
     for (fanout_tree::FTNode& tree_node : used_fanout_tree_nodes) {
       left_boundary = right_boundary;
       auto duplication_factor = static_cast<uint8_t>(
@@ -2682,12 +2575,8 @@ public:
         prev_leaf->next_leaf_.update(child_node);
       }
       child_node->parent_ = parent;
-
-      //update model node metadata
-      for (int i = cur; i < cur + child_node_repeats; i++) {
-        parent_new_children[i] = child_node;
-      }
       cur += child_node_repeats;
+      generated_nodes.push_back({child_node, child_node_repeats});
       prev_leaf = child_node;
 #if DEBUG_PRINT
       alex::coutLock.lock();
@@ -2700,18 +2589,27 @@ public:
       alex::coutLock.unlock();
 #endif
     }
+    pthread_rwlock_wrlock(&(parent->children_rw_lock_));
+    cur = start_bucketID;
+    //update model node metadata
+    for (auto it = generated_nodes.begin(); it != generated_nodes.end(); ++it) {
+      auto generated_node = *it;
+      for (int i = cur; i < cur + generated_node.second; ++i) {
+        parent->children_[i] = generated_node.first;
+      }
+      cur += generated_node.second;
+    }
 #if DEBUG_PRINT
       alex::coutLock.lock();
       std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
       std::cout << "cndn children_\n";
       for (int i = 0 ; i < parent->num_children_; i++) {
-        std::cout << i << " : " << parent_new_children[i] << '\n';
+        std::cout << i << " : " << parent->children_[i] << '\n';
       }
       std::cout << std::flush;
       alex::coutLock.unlock();
 #endif
-    parent->children_.val_ = parent_new_children;
-    parent->children_.unlock();
+    pthread_rwlock_unlock(&(parent->children_rw_lock_));
 
     //update right-most leaf's next/prev leaf.
     old_node->pending_right_leaf_.update(prev_leaf);
@@ -2742,7 +2640,6 @@ public:
     std::cout << "finished create_new_dn" << std::endl;
     alex::coutLock.unlock();
 #endif
-    return parent_old_children; 
   }
 
   /*** Stats ***/
@@ -3271,10 +3168,10 @@ public:
         : index_(index), cur_node_(index->root_node_) {
       if (cur_node_ && !cur_node_->is_leaf_) {
         auto node = static_cast<model_node_type*>(cur_node_);
-        node_stack_.push(node->children_.val_[node->num_children_ - 1]);
+        node_stack_.push(node->children_[node->num_children_ - 1]);
         for (int i = node->num_children_ - 2; i >= 0; i--) {
-          if (node->children_.val_[i] != node->children_.val_[i + 1]) {
-            node_stack_.push(node->children_.val_[i]);
+          if (node->children_[i] != node->children_[i + 1]) {
+            node_stack_.push(node->children_[i]);
           }
         }
       }
@@ -3293,10 +3190,10 @@ public:
 
       if (!cur_node_->is_leaf_) {
         auto node = static_cast<model_node_type*>(cur_node_);
-        node_stack_.push(node->children_.val_[node->num_children_ - 1]);
+        node_stack_.push(node->children_[node->num_children_ - 1]);
         for (int i = node->num_children_ - 2; i >= 0; i--) {
-          if (node->children_.val_[i] != node->children_.val_[i + 1]) {
-            node_stack_.push(node->children_.val_[i]);
+          if (node->children_[i] != node->children_[i + 1]) {
+            node_stack_.push(node->children_[i]);
           }
         }
       }
