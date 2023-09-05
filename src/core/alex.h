@@ -74,7 +74,6 @@ class Alex {
   node_type* root_node_ = nullptr;
   model_node_type* superroot_ =
       nullptr;  // phantom node that is the root's parent
-  unsigned int max_key_length_ = 1; // maximum length of keys in this ALEX structure.
 
   /* User-changeable parameters */
   struct Params {
@@ -165,48 +164,34 @@ class Alex {
   * 4) allocation function used for allocation. Default is basic allocator. */
   Alex() {
     // key_domain setup
-    istats_.key_domain_min_ = new T[1];
-    istats_.key_domain_min_[0] = STR_VAL_MAX;
-    istats_.key_domain_max_ = new T[1];
+    istats_.key_domain_min_ = new T[max_key_length_];
+    istats_.key_domain_max_ = new T[max_key_length_];
     istats_.key_domain_max_[0] = STR_VAL_MIN;
+    std::fill(istats_.key_domain_min_, istats_.key_domain_min_ + max_key_length_,
+        STR_VAL_MAX);
+    std::fill(istats_.key_domain_max_ + 1, istats_.key_domain_max_ + max_key_length_, 0);
     
     // Set up root as empty data node
     auto empty_data_node = new (data_node_allocator().allocate(1))
-        data_node_type(1, nullptr, key_less_, allocator_);
+        data_node_type(nullptr, key_less_, allocator_);
     empty_data_node->bulk_load(nullptr, 0);
     root_node_ = empty_data_node;
     create_superroot();
   }
 
-  Alex(unsigned int max_key_length,
-       const Compare& comp = Compare(), const Alloc& alloc = Alloc())
-    : max_key_length_(max_key_length), key_less_(comp), allocator_(alloc) {
-    // key_domain setup
-    istats_.key_domain_min_ = new T[max_key_length];
-    istats_.key_domain_max_ = new T[max_key_length];
-    std::fill(istats_.key_domain_min_, istats_.key_domain_min_ + max_key_length,
-        STR_VAL_MAX);
-    istats_.key_domain_max_[0] = STR_VAL_MIN;
-    
-    // Set up root as empty data node
-    auto empty_data_node = new (data_node_allocator().allocate(1))
-        data_node_type(max_key_length_, nullptr, key_less_, allocator_);
-    empty_data_node->bulk_load(nullptr, 0);
-    root_node_ = empty_data_node;
-    create_superroot();
-  }  
-
   Alex(const Compare& comp, const Alloc& alloc = Alloc())
       : key_less_(comp), allocator_(alloc) {
     // key_domain setup
-    istats_.key_domain_min_ = new T[1];
-    istats_.key_domain_min_[0] = STR_VAL_MAX;
-    istats_.key_domain_max_ = new T[1];
+    istats_.key_domain_min_ = new T[max_key_length_];
+    istats_.key_domain_max_ = new T[max_key_length_];
     istats_.key_domain_max_[0] = STR_VAL_MIN;
+    std::fill(istats_.key_domain_min_, istats_.key_domain_min_ + max_key_length_,
+        STR_VAL_MAX);
+    std::fill(istats_.key_domain_max_ + 1, istats_.key_domain_max_ + max_key_length_, 0);
 
     // Set up root as empty data node
     auto empty_data_node = new (data_node_allocator().allocate(1))
-        data_node_type(1, nullptr, key_less_, allocator_);
+        data_node_type(nullptr, key_less_, allocator_);
     empty_data_node->bulk_load(nullptr, 0);
     root_node_ = empty_data_node;
     create_superroot();
@@ -214,14 +199,16 @@ class Alex {
 
   Alex(const Alloc& alloc) : allocator_(alloc) {
     // key_domain setup
-    istats_.key_domain_min_ = new T[1];
-    istats_.key_domain_min_[0] = STR_VAL_MAX;
-    istats_.key_domain_max_ = new T[1];
+    istats_.key_domain_min_ = new T[max_key_length_];
+    istats_.key_domain_max_ = new T[max_key_length_];
     istats_.key_domain_max_[0] = STR_VAL_MIN;
+    std::fill(istats_.key_domain_min_, istats_.key_domain_min_ + max_key_length_,
+        STR_VAL_MAX);
+    std::fill(istats_.key_domain_max_ + 1, istats_.key_domain_max_ + max_key_length_, 0);
 
     // Set up root as empty data node
     auto empty_data_node = new (data_node_allocator().allocate(1))
-        data_node_type(1, nullptr, key_less_, allocator_);
+        data_node_type(nullptr, key_less_, allocator_);
     empty_data_node->bulk_load(nullptr, 0);
     root_node_ = empty_data_node;
     create_superroot();
@@ -246,35 +233,15 @@ class Alex {
   //           possible but not implemented since it's not used yet.)
   template <class InputIterator>
   explicit Alex(InputIterator first, InputIterator last,
-                unsigned int max_key_length,
-                const Compare& comp = Compare(), const Alloc& alloc = Alloc())
-      : max_key_length_(max_key_length),
-        key_less_(comp), allocator_(alloc) {
-    // key_domain setup
-    istats_.key_domain_min_ = new T[max_key_length];
-    std::fill(istats_.key_domain_min_, istats_.key_domain_min_ + max_key_length,
-              STR_VAL_MAX);
-    istats_.key_domain_max_ = new T[max_key_length];
-    istats_.key_domain_max_[0] = STR_VAL_MIN;
-
-    std::vector<V> values;
-    for (auto it = first; it != last; ++it) {
-      values.push_back(*it);
-    }
-    std::sort(values.begin(), values.end(),
-            [this](auto const& a, auto const& b) {return a.first < b.first;});
-    bulk_load(values.data(), static_cast<int>(values.size()));
-  }
-
-  template <class InputIterator>
-  explicit Alex(InputIterator first, InputIterator last,
                 const Compare& comp = Compare(), const Alloc& alloc = Alloc())
       : key_less_(comp), allocator_(alloc) {
     // key_domain setup
-    istats_.key_domain_min_ = new T[1];
-    istats_.key_domain_min_[0] = STR_VAL_MAX;
-    istats_.key_domain_max_ = new T[1];
+    istats_.key_domain_min_ = new T[max_key_length_];
+    std::fill(istats_.key_domain_min_, istats_.key_domain_min_ + max_key_length_,
+              STR_VAL_MAX);
+    istats_.key_domain_max_ = new T[max_key_length_];
     istats_.key_domain_max_[0] = STR_VAL_MIN;
+    std::fill(istats_.key_domain_max_ + 1, istats_.key_domain_max_ + max_key_length_, 0);
 
     std::vector<V> values;
     for (auto it = first; it != last; ++it) {
@@ -290,10 +257,12 @@ class Alex {
                 const Alloc& alloc = Alloc())
       : allocator_(alloc) {
     // key_domain setup
-    istats_.key_domain_min_ = new T[1];
-    istats_.key_domain_min_[0] = STR_VAL_MAX;
-    istats_.key_domain_max_ = new T[1];
+    istats_.key_domain_min_ = new T[max_key_length_];
+    std::fill(istats_.key_domain_min_, istats_.key_domain_min_ + max_key_length_,
+              STR_VAL_MAX);
+    istats_.key_domain_max_ = new T[max_key_length_];
     istats_.key_domain_max_[0] = STR_VAL_MIN;
+    std::fill(istats_.key_domain_max_ + 1, istats_.key_domain_max_ + max_key_length_, 0);
 
     std::vector<V> values;
     for (auto it = first; it != last; ++it) {
@@ -311,13 +280,12 @@ class Alex {
         derived_params_(other.derived_params_),
         istats_(other.istats_),
         key_less_(other.key_less_),
-        allocator_(other.allocator_),
-        max_key_length_(other.max_key_length_) {
+        allocator_(other.allocator_) {
     istats_.key_domain_min_ = new T[max_key_length_];
     istats_.key_domain_max_ = new T[max_key_length_];
-    std::copy(other.istats_.key_domain_min_, other.istats_.key_domain_min_ + other.max_key_length_,
+    std::copy(other.istats_.key_domain_min_, other.istats_.key_domain_min_ + max_key_length_,
         istats_.key_domain_min_);
-    std::copy(other.istats_.key_domain_max_, other.istats_.key_domain_max_ + other.max_key_length_,
+    std::copy(other.istats_.key_domain_max_, other.istats_.key_domain_max_ + max_key_length_,
         istats_.key_domain_max_);
     superroot_ =
         static_cast<model_node_type*>(copy_tree_recursive(other.superroot_));
@@ -340,12 +308,11 @@ class Alex {
       num_keys.val_ = other.num_keys.val_;
       key_less_ = other.key_less_;
       allocator_ = other.allocator_;
-      max_key_length_ = other.max_key_length_;
-      istats_.key_domain_min_ = new T[other.max_key_length_];
-      istats_.key_domain_max_ = new T[other.max_key_length_];
-      std::copy(other.istats_.key_domain_min_, other.istats_.key_domain_min_ + other.max_key_length_,
+      istats_.key_domain_min_ = new T[max_key_length_];
+      istats_.key_domain_max_ = new T[max_key_length_];
+      std::copy(other.istats_.key_domain_min_, other.istats_.key_domain_min_ + max_key_length_,
           istats_.key_domain_min_);
-      std::copy(other.istats_.key_domain_max_, other.istats_.key_domain_max_ + other.max_key_length_,
+      std::copy(other.istats_.key_domain_max_, other.istats_.key_domain_max_ + max_key_length_,
           istats_.key_domain_max_);
       superroot_ =
           static_cast<model_node_type*>(copy_tree_recursive(other.superroot_));
@@ -359,10 +326,6 @@ class Alex {
     std::swap(derived_params_, other.derived_params_);
     std::swap(key_less_, other.key_less_);
     std::swap(allocator_, other.allocator_);
-
-    unsigned int arb_max_key_length_ = max_key_length_;
-    max_key_length_ = other.max_key_length_;
-    other.max_key_length_ = arb_max_key_length_;
     
     auto arb_num_keys = num_keys.val_;
     num_keys.val_ = other.num_keys.val_;
@@ -487,7 +450,6 @@ class Alex {
 
     while (true) {
       auto node = static_cast<model_node_type*>(cur);
-Initialization:
       pthread_rwlock_rdlock(&(node->children_rw_lock_));
       node_type **cur_children = node->children_;
       int num_children = node->num_children_;
@@ -506,16 +468,13 @@ Initialization:
         alex::coutLock.lock();
         std::cout << "t" << worker_id << " - ";
         std::cout << "initial bucket : " << bucketID << std::endl;
-        //std::cout << "current key max length : " << key.max_key_length_ << std::endl;
-        //std::cout << "lb max length : " << cur->min_key_.val_->max_key_length_ << std::endl;
-        //std::cout << "ub max length : " << cur->max_key_.val_->max_key_length_ << std::endl;
         //std::cout << "min_key : " << cur->min_key_.read() << std::endl;
         //std::cout << "max_key : " << cur->max_key_.read() << std::endl;
         alex::coutLock.unlock();
 #endif
 
-      AlexKey<T> min_tmp_key(istats_.key_domain_min_, max_key_length_);
-      AlexKey<T> max_tmp_key(istats_.key_domain_max_, max_key_length_);
+      AlexKey<T> min_tmp_key(istats_.key_domain_min_);
+      AlexKey<T> max_tmp_key(istats_.key_domain_max_);
       AlexKey<T> *cur_node_min_key = cur->min_key_.read();
       memory_fence();
       AlexKey<T> *cur_node_max_key = cur->max_key_.read();
@@ -679,7 +638,8 @@ Initialization:
 
             if (bucketID > num_children - 1) {
               //should EXTEND the last node.
-              AlexKey<T> *new_max_key = new AlexKey<T>(max_key_length_);
+              AlexKey<T> *new_max_key = new AlexKey<T>();
+              new_max_key->key_arr_ = new T[max_key_length_];
               std::copy(key.key_arr_, key.key_arr_ + max_key_length_, new_max_key->key_arr_);
               AlexKey<T> *old_max_key = cur->max_key_.val_;
               cur->max_key_.val_ = new_max_key;
@@ -742,8 +702,10 @@ EmptyNodeStart:
                 alex::coutLock.unlock();
 #endif
 
-                AlexKey<T> *new_max_key = new AlexKey<T>(max_key_length_);
-                AlexKey<T> *new_min_key = new AlexKey<T>(max_key_length_);
+                AlexKey<T> *new_max_key = new AlexKey<T>();
+                AlexKey<T> *new_min_key = new AlexKey<T>();
+                new_max_key->key_arr_ = new T[max_key_length_];
+                new_min_key->key_arr_ = new T[max_key_length_];
                 std::copy(key.key_arr_, key.key_arr_ + max_key_length_, new_max_key->key_arr_);
                 std::copy(key.key_arr_, key.key_arr_ + max_key_length_, new_min_key->key_arr_);
                 AlexKey<T> *old_max_key = cur_next->max_key_.val_;
@@ -815,8 +777,10 @@ EmptyNodeStart:
                 std::cout << "decided to insert to empty data node (it's bucket ID : " << cur_next_bucketID << ")" << std::endl;
                 alex::coutLock.unlock();
 #endif
-                AlexKey<T> *new_max_key = new AlexKey<T>(max_key_length_);
-                AlexKey<T> *new_min_key = new AlexKey<T>(max_key_length_);
+                AlexKey<T> *new_max_key = new AlexKey<T>();
+                AlexKey<T> *new_min_key = new AlexKey<T>();
+                new_max_key->key_arr_ = new T[max_key_length_];
+                new_min_key->key_arr_ = new T[max_key_length_];
                 std::copy(key.key_arr_, key.key_arr_ + max_key_length_, new_max_key->key_arr_);
                 std::copy(key.key_arr_, key.key_arr_ + max_key_length_, new_min_key->key_arr_);
                 AlexKey<T> *old_max_key = cur_next->max_key_.val_;
@@ -885,7 +849,8 @@ EmptyNodeStart:
                         << " and max_key_ as " << key.key_arr_ << std::endl;
               alex::coutLock.unlock();
 #endif
-              AlexKey<T> *new_max_key = new AlexKey<T>(max_key_length_);
+              AlexKey<T> *new_max_key = new AlexKey<T>();
+              new_max_key->key_arr_ = new T[max_key_length_];
               std::copy(key.key_arr_, key.key_arr_ + max_key_length_, new_max_key->key_arr_);
               AlexKey<T> *old_max_key = cur->max_key_.val_;
               cur->max_key_.val_ = new_max_key;
@@ -1148,7 +1113,7 @@ EmptyNodeStart:
 
     // Build temporary root model, which outputs a CDF in the range [0, 1]
     root_node_ =
-        new (model_node_allocator().allocate(1)) model_node_type(0, nullptr, max_key_length_, allocator_);
+        new (model_node_allocator().allocate(1)) model_node_type(0, nullptr, allocator_);
     AlexKey<T> min_key = values[0].first;
     AlexKey<T> max_key = values[num_keys - 1].first;
 
@@ -1179,7 +1144,7 @@ EmptyNodeStart:
 #endif
 
     // Compute cost of root node
-    LinearModel<T> root_data_node_model(max_key_length_);
+    LinearModel<T> root_data_node_model;
     data_node_type::build_model(values, num_keys, &root_data_node_model,
                                 params_.approximate_model_computation);
     DataNodeStats stats;
@@ -1208,7 +1173,7 @@ EmptyNodeStart:
     if (!root_node_) return;
     delete_node(superroot_);
     superroot_ = new (model_node_allocator().allocate(1))
-        model_node_type(static_cast<short>(root_node_->level_ - 1), nullptr, max_key_length_, allocator_);
+        model_node_type(static_cast<short>(root_node_->level_ - 1), nullptr, allocator_);
     superroot_->num_children_ = 1;
     superroot_->children_ = new node_type*[1];
     root_node_->parent_ = superroot_;
@@ -1245,8 +1210,8 @@ EmptyNodeStart:
     std::copy(min_key_arr, min_key_arr + max_key_length_, superroot_->min_key_.val_->key_arr_);
     std::copy(max_key_arr, max_key_arr + max_key_length_, superroot_->max_key_.val_->key_arr_);
 
-    AlexKey<T> mintmpkey(istats_.key_domain_min_, max_key_length_);
-    AlexKey<T> maxtmpkey(istats_.key_domain_max_, max_key_length_);
+    AlexKey<T> mintmpkey(istats_.key_domain_min_);
+    AlexKey<T> maxtmpkey(istats_.key_domain_max_);
     if (key_equal(mintmpkey, maxtmpkey)) {//keys are equal
       unsigned int non_zero_cnt_ = 0;
 
@@ -1326,8 +1291,7 @@ EmptyNodeStart:
         (node != root_node_)) {
       auto data_node = new (data_node_allocator().allocate(1))
           data_node_type(node->level_, derived_params_.max_data_node_slots,
-                         node->max_key_length_, parent,
-                         key_less_, allocator_);
+                         parent, key_less_, allocator_);
       data_node->bulk_load(values, num_keys, data_node_model,
                            params_.approximate_model_computation);
       data_node->cost_ = node->cost_;
@@ -1362,7 +1326,7 @@ EmptyNodeStart:
 #endif
       // Convert to model node based on the output of the fanout tree
       auto model_node = new (model_node_allocator().allocate(1))
-          model_node_type(node->level_, parent, max_key_length_, allocator_);
+          model_node_type(node->level_, parent, allocator_);
       if (best_fanout_tree_depth == 0) {
         // slightly hacky: we assume this means that the node is relatively
         // uniform but we need to split in
@@ -1384,7 +1348,7 @@ EmptyNodeStart:
 #endif
         while (true) {
           fanout_tree::compute_level<T, P>(
-            values, num_keys, node, total_keys, used_fanout_tree_nodes,
+            values, num_keys, total_keys, used_fanout_tree_nodes,
             best_fanout_tree_depth, max_data_node_keys,
             params_.expected_insert_frac, params_.approximate_model_computation,
             params_.approximate_cost_computation);
@@ -1415,13 +1379,13 @@ EmptyNodeStart:
       std::cout << "chosen fanout is... : " << fanout << std::endl;
 #endif
       //obtianing CDF resulting to [0,fanout]
-      LinearModel<T> tmp_model(node->max_key_length_);
+      LinearModel<T> tmp_model;
       LinearModelBuilder<T> tmp_model_builder(&tmp_model);
       for (int i = 0; i < num_keys; i++) {
         tmp_model_builder.add(values[i].first, ((double) i * fanout / (num_keys-1)));
       }
       tmp_model_builder.build();
-      for (unsigned int i = 0; i < node->model_.max_key_length_; i++) {
+      for (unsigned int i = 0; i < max_key_length_; i++) {
         model_node->model_.a_[i] = tmp_model.a_[i];
       }
       model_node->model_.b_ = tmp_model.b_; 
@@ -1436,7 +1400,7 @@ EmptyNodeStart:
 #endif
       for (fanout_tree::FTNode& tree_node : used_fanout_tree_nodes) {
         auto child_node = new (model_node_allocator().allocate(1))
-            model_node_type(static_cast<short>(node->level_ + 1), model_node, max_key_length_, allocator_);
+            model_node_type(static_cast<short>(node->level_ + 1), model_node, allocator_);
         child_node->cost_ = tree_node.cost;
         child_node->duplication_factor_ =
             static_cast<uint8_t>(best_fanout_tree_depth - tree_node.level);
@@ -1454,18 +1418,18 @@ EmptyNodeStart:
         std::cout << "finished finding boundary..." << std::endl;
         std::cout << "left boundary is : ";
         if (tree_node.left_boundary == num_keys) {
-          for (unsigned int i = 0; i < node->max_key_length_; i++) {
+          for (unsigned int i = 0; i < max_key_length_; i++) {
             std::cout << (char) values[tree_node.left_boundary - 1].first.key_arr_[i];
           }
         }
         else {
-          for (unsigned int i = 0; i < node->max_key_length_; i++) {
+          for (unsigned int i = 0; i < max_key_length_; i++) {
             std::cout << (char) values[tree_node.left_boundary].first.key_arr_[i];
           }
         }
         std::cout << std::endl;
         std::cout << "right boundary is : ";
-        for (unsigned int i = 0; i < node->max_key_length_; i++) {
+        for (unsigned int i = 0; i < max_key_length_; i++) {
           std::cout << (char) values[tree_node.right_boundary - 1].first.key_arr_[i];
         }
         std::cout << std::endl;
@@ -1494,12 +1458,12 @@ EmptyNodeStart:
         //  left_key[i] = left_boundary[i];
         //  right_key[i] = right_boundary[i];
         //}
-        //std::cout << "left prediction result (bln) " << child_node->model_.predict_double(AlexKey<T>(left_key, max_key_length_)) << std::endl;
-        //std::cout << "right prediction result (bln) " << child_node->model_.predict_double(AlexKey<T>(right_key, max_key_length_)) << std::endl;
+        //std::cout << "left prediction result (bln) " << child_node->model_.predict_double(AlexKey<T>(left_key)) << std::endl;
+        //std::cout << "right prediction result (bln) " << child_node->model_.predict_double(AlexKey<T>(right_key)) << std::endl;
 #endif
 
         model_node->children_[cur] = child_node;
-        LinearModel<T> child_data_node_model(tree_node.a, tree_node.b, max_key_length_);
+        LinearModel<T> child_data_node_model(tree_node.a, tree_node.b);
         bulk_load_node(values + tree_node.left_boundary,
                        tree_node.right_boundary - tree_node.left_boundary,
                        model_node->children_[cur], model_node, total_keys,
@@ -1547,8 +1511,7 @@ EmptyNodeStart:
       // Convert to data node
       auto data_node = new (data_node_allocator().allocate(1))
           data_node_type(node->level_, derived_params_.max_data_node_slots,
-                         max_key_length_, parent,
-                         key_less_, allocator_);
+                         parent, key_less_, allocator_);
       data_node->bulk_load(values, num_keys, data_node_model,
                            params_.approximate_model_computation);
       data_node->cost_ = node->cost_;
@@ -1573,12 +1536,11 @@ EmptyNodeStart:
       bool reuse_model = false, bool keep_left = false,
       bool keep_right = false) {
     auto node = new (this_ptr->data_node_allocator().allocate(1))
-        data_node_type(existing_node->max_key_length_, existing_node->parent_, 
-                       this_ptr->key_less_, this_ptr->allocator_);
+        data_node_type(existing_node->parent_, this_ptr->key_less_, this_ptr->allocator_);
     if (tree_node) {
       // Use the model and num_keys saved in the tree node so we don't have to
       // recompute it
-      LinearModel<T> precomputed_model(tree_node->a, tree_node->b, existing_node->max_key_length_);
+      LinearModel<T> precomputed_model(tree_node->a, tree_node->b);
       node->bulk_load_from_existing(existing_node, left, right, worker_id, keep_left,
                                     keep_right, &precomputed_model,
                                     tree_node->num_keys);
@@ -1890,7 +1852,7 @@ public:
 #endif
     char larger_key = 0;
     char smaller_key = 0;
-    for (unsigned int i = 0; i < key.max_key_length_; i++) {
+    for (unsigned int i = 0; i < max_key_length_; i++) {
       if (key.key_arr_[i] > istats_.key_domain_max_[i]) {larger_key = 1; break;}
       else if (key.key_arr_[i] < istats_.key_domain_min_[i]) {smaller_key = 1; break;}
     }
@@ -2205,14 +2167,14 @@ public:
     // Create the new model node that will replace the current data node
     int fanout = 1 << fanout_tree_depth;
     auto new_node = new (this_ptr->model_node_allocator().allocate(1))
-        model_node_type(leaf->level_, parent, this_ptr->max_key_length_, this_ptr->allocator_);
+        model_node_type(leaf->level_, parent, this_ptr->allocator_);
     new_node->duplication_factor_ = leaf->duplication_factor_;
     new_node->num_children_ = fanout;
     new_node->children_ = new node_type*[fanout];
     //needs to initialize min/max key in case of split_downwards.
-    std::copy(leaf->min_key_.val_->key_arr_, leaf->min_key_.val_->key_arr_ + leaf->max_key_length_,
+    std::copy(leaf->min_key_.val_->key_arr_, leaf->min_key_.val_->key_arr_ + max_key_length_,
               new_node->min_key_.val_->key_arr_);
-    std::copy(leaf->max_key_.val_->key_arr_, leaf->max_key_.val_->key_arr_ + leaf->max_key_length_,
+    std::copy(leaf->max_key_.val_->key_arr_, leaf->max_key_.val_->key_arr_ + max_key_length_,
               new_node->max_key_.val_->key_arr_);
 
 
@@ -2222,8 +2184,8 @@ public:
     int end_bucketID =
         start_bucketID + repeats;  // first bucket with different child
 
-    std::copy(model_param, model_param + new_node->max_key_length_, new_node->model_.a_);
-    new_node->model_.b_ = model_param[new_node->max_key_length_];
+    std::copy(model_param, model_param + max_key_length_, new_node->model_.a_);
+    new_node->model_.b_ = model_param[max_key_length_];
 
 #if DEBUG_PRINT
     //alex::coutLock.lock();
@@ -2374,11 +2336,12 @@ public:
         parent->num_children_ - 1);
 
     int right_boundary = 0;
-    AlexKey<T> tmpkey = AlexKey<T>(this_ptr->max_key_length_);
+    AlexKey<T> tmpkey;
+    tmpkey.key_arr_ = new T[max_key_length_];
     //According to my insight, linear model would be monotonically increasing
     //So I think we could compute key corresponding to mid_bucketID as
     //average of min/max key of current splitting node.
-    for (unsigned int i = 0; i < this_ptr->max_key_length_; i++) {
+    for (unsigned int i = 0; i < max_key_length_; i++) {
       tmpkey.key_arr_[i] = (old_node->max_key_.val_->key_arr_[i] + old_node->min_key_.val_->key_arr_[i]) / 2;
     }
     

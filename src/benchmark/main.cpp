@@ -88,11 +88,12 @@ int main(int argc, char* argv[]) {
   strict_read = get_boolean_flag(flags, "strict_read");
   strict_insert = get_boolean_flag(flags, "strict_insert");
 
+  alex::max_key_length_ = max_key_length;
+
   // Allocation for key containers.
   keys = new alex::AlexKey<KEY_TYPE>[total_num_keys];
   for (uint64_t i = 0; i < total_num_keys; i++) { 
     keys[i].key_arr_ = new KEY_TYPE[max_key_length]();
-    keys[i].max_key_length_ = max_key_length;
   }
 
   // Read keys from file
@@ -112,8 +113,8 @@ int main(int argc, char* argv[]) {
   std::pair<alex::AlexKey<KEY_TYPE>, PAYLOAD_TYPE> *values;
   std::mt19937_64 gen_payload(std::random_device{}());
   values = new std::pair<alex::AlexKey<KEY_TYPE>, PAYLOAD_TYPE>[init_num_keys + 2];
-  values[init_num_keys].first = alex::AlexKey<KEY_TYPE>(max_key_length);
-  values[init_num_keys+1].first = alex::AlexKey<KEY_TYPE>(max_key_length);
+  values[init_num_keys].first.key_arr_ = new KEY_TYPE[alex::max_key_length_]();
+  values[init_num_keys+1].first.key_arr_ = new KEY_TYPE[alex::max_key_length_]();
   values[init_num_keys].first.key_arr_[0] = STR_VAL_MIN;
   for (unsigned int i = 0; i < max_key_length; i++) {
     values[init_num_keys+1].first.key_arr_[i] = STR_VAL_MAX;
@@ -135,7 +136,7 @@ int main(int argc, char* argv[]) {
   init_num_keys += 2;
 
   // Create ALEX and bulk load
-  alex::Alex<KEY_TYPE, PAYLOAD_TYPE> index(max_key_length);
+  alex::Alex<KEY_TYPE, PAYLOAD_TYPE> index;
   std::sort(values, values + init_num_keys,
             [](auto const& a, auto const& b) {return a.first < b.first;});
   auto bulkload_start_time = std::chrono::high_resolution_clock::now();

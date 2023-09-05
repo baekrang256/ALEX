@@ -58,10 +58,7 @@ class AlexNode {
   short level_ = 0;
 
   // Both model nodes and data nodes nodes use models
-  LinearModel<T> model_ = LinearModel<T>((unsigned int) 1);
-
-  // Node's linear model's key's max_length.
-  unsigned int max_key_length_ = 1;
+  LinearModel<T> model_;
 
   // Could be either the expected or empirical cost, depending on how this field
   // is used
@@ -78,42 +75,34 @@ class AlexNode {
 
   AlexNode() = default;
   explicit AlexNode(short level) : level_(level) {
-    max_key_.val_ = new AlexKey<T>(1);
-    min_key_.val_ = new AlexKey<T>(1);
+    max_key_.val_ = new AlexKey<T>();
+    min_key_.val_ = new AlexKey<T>();
+    max_key_.val_->key_arr_ = new T[max_key_length_];
+    min_key_.val_->key_arr_ = new T[max_key_length_];
     max_key_.val_->key_arr_[0] = STR_VAL_MIN;
-    min_key_.val_->key_arr_[0] = STR_VAL_MAX;
+    std::fill(max_key_.val_->key_arr_ + 1, max_key_.val_->key_arr_ + max_key_length_, 0);
+    std::fill(min_key_.val_->key_arr_, min_key_.val_->key_arr_ + max_key_length_,
+        STR_VAL_MAX);
   }
   AlexNode(short level, bool is_leaf) : is_leaf_(is_leaf), level_(level) {
-    max_key_.val_ = new AlexKey<T>(1);
-    min_key_.val_ = new AlexKey<T>(1);
+    max_key_.val_ = new AlexKey<T>();
+    min_key_.val_ = new AlexKey<T>();
+    max_key_.val_->key_arr_ = new T[max_key_length_];
+    min_key_.val_->key_arr_ = new T[max_key_length_];
     max_key_.val_->key_arr_[0] = STR_VAL_MIN;
-    min_key_.val_->key_arr_[0] = STR_VAL_MAX;
+    std::fill(max_key_.val_->key_arr_ + 1, max_key_.val_->key_arr_ + max_key_length_, 0);
+    std::fill(min_key_.val_->key_arr_, min_key_.val_->key_arr_ + max_key_length_,
+        STR_VAL_MAX);
   }
   AlexNode(short level, bool is_leaf, model_node_type *parent)
-      : level_(level), is_leaf_(is_leaf), parent_(parent) {
-    max_key_.val_ = new AlexKey<T>(1);
-    min_key_.val_ = new AlexKey<T>(1);
+      : is_leaf_(is_leaf), level_(level), parent_(parent) {
+    max_key_.val_ = new AlexKey<T>();
+    min_key_.val_ = new AlexKey<T>();
+    max_key_.val_->key_arr_ = new T[max_key_length_];
+    min_key_.val_->key_arr_ = new T[max_key_length_];
     max_key_.val_->key_arr_[0] = STR_VAL_MIN;
-    min_key_.val_->key_arr_[0] = STR_VAL_MAX;
-  }
-  AlexNode(short level, bool is_leaf, 
-      model_node_type *parent, unsigned int max_key_length) 
-        : is_leaf_(is_leaf), level_(level), model_(max_key_length),
-          max_key_length_(max_key_length), parent_(parent) {
-    max_key_.val_ = new AlexKey<T>(max_key_length_);
-    min_key_.val_ = new AlexKey<T>(max_key_length_);
-    if (typeid(T) != typeid(char)) { //numeric key
-      std::fill(max_key_.val_->key_arr_, max_key_.val_->key_arr_ + max_key_length,
-          std::numeric_limits<T>::lowest());
-      std::fill(min_key_.val_->key_arr_, min_key_.val_->key_arr_ + max_key_length,
-          std::numeric_limits<T>::max());
-    }
-    else { //string key
-      max_key_.val_->key_arr_[0] = STR_VAL_MIN;
-      std::fill(max_key_.val_->key_arr_ + 1, max_key_.val_->key_arr_ + max_key_length, 0);
-      std::fill(min_key_.val_->key_arr_, min_key_.val_->key_arr_ + max_key_length,
-          STR_VAL_MAX);
-    }
+    std::fill(max_key_.val_->key_arr_ + 1, max_key_.val_->key_arr_ + max_key_length_, 0);
+    std::fill(min_key_.val_->key_arr_, min_key_.val_->key_arr_ + max_key_length_, STR_VAL_MAX);
   }
 
   AlexNode(self_type& other)
@@ -121,11 +110,10 @@ class AlexNode {
         duplication_factor_(other.duplication_factor_),
         level_(other.level_),
         model_(other.model_),
-        max_key_length_(other.max_key_length_),
         cost_(other.cost_),
         parent_(other.parent_) {
-    max_key_.val_ = new AlexKey<T>(other.max_key_.val_->key_arr_, other.max_key_length_);
-    min_key_.val_ = new AlexKey<T>(other.min_key_.val_->key_arr_, other.max_key_length_);
+    max_key_.val_ = new AlexKey<T>(other.max_key_.val_->key_arr_);
+    min_key_.val_ = new AlexKey<T>(other.min_key_.val_->key_arr_);
   }
   virtual ~AlexNode() = default;
 
@@ -163,11 +151,6 @@ class AlexModelNode : public AlexNode<T, P, Alloc> {
                          const Alloc& alloc = Alloc())
       : AlexNode<T, P, Alloc>(level, false, parent), allocator_(alloc){
       }
-  
-  explicit AlexModelNode(short level, self_type *parent,
-                         unsigned int max_key_length, const Alloc& alloc = Alloc())
-      : AlexNode<T, P, Alloc>(level, false, parent, max_key_length), allocator_(alloc) {
-      }
 
   ~AlexModelNode() {
     delete children_;
@@ -191,7 +174,6 @@ class AlexModelNode : public AlexNode<T, P, Alloc> {
     this->duplication_factor_ = other.duplication_factor_;
     this->level_ = other.level_;
     this->model_ = other.model_;
-    this->max_key_length_ = other.max_key_length_;
     this->cost_ = other.cost_;
     this->parent_ = other.parent_;
 
@@ -315,13 +297,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   int num_inserts_ = 0;                      // does not reset after resizing
   int num_resizes_ = 0;  // technically not required, but nice to have
 
-  //now defined in all nodes.
-  // Variables for determining append-mostly behavior
-  // max key in node, updates after inserts but not erases.
-  //AlexKey<T> *max_key_; 
-  // min key in node, updates after inserts but not erases. 
-  //AlexKey<T> *min_key_;
-
   int num_right_out_of_bounds_inserts_ =
       0;  // number of inserts that are larger than the max key
   int num_left_out_of_bounds_inserts_ =
@@ -343,54 +318,50 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   /*** Constructors and destructors ***/
 
   AlexDataNode () : AlexNode<T, P, Alloc>(0, true) {
-    T *kEndSentinel = new T[1];
-    kEndSentinel_.key_arr_ = kEndSentinel;
-    kEndSentinel_.max_key_length_ = 1;
-    the_max_key_arr_ = new T[1];
-    the_min_key_arr_ = new T[1];
+    the_max_key_arr_ = new T[max_key_length_];
+    the_min_key_arr_ = new T[max_key_length_];
+    kEndSentinel_.key_arr_ = new T[max_key_length_];
 
-    kEndSentinel[0] = STR_VAL_MAX;
-    the_max_key_arr_[0] = STR_VAL_MAX;
+    std::fill(kEndSentinel_.key_arr_, kEndSentinel_.key_arr_ + max_key_length_,
+        STR_VAL_MAX);
+    std::fill(the_max_key_arr_, the_max_key_arr_ + max_key_length_,
+        STR_VAL_MAX);
     the_min_key_arr_[0] = STR_VAL_MIN;
+    std::fill(the_min_key_arr_ + 1, the_min_key_arr_ + max_key_length_, 0);
   }
 
-  explicit AlexDataNode(unsigned int max_key_length, model_node_type *parent,
+  explicit AlexDataNode(model_node_type *parent,
         const Compare& comp = Compare(), const Alloc& alloc = Alloc())
-      : AlexNode<T, P, Alloc>(0, true, parent, max_key_length), key_less_(comp), allocator_(alloc) {
-    T *kEndSentinel_arr = new T[max_key_length];
-    kEndSentinel_.key_arr_ = kEndSentinel_arr;
-    kEndSentinel_.max_key_length_ = max_key_length;
-    the_max_key_arr_ = new T[max_key_length];
-    the_min_key_arr_ = new T[max_key_length];
+      : AlexNode<T, P, Alloc>(0, true, parent), key_less_(comp), allocator_(alloc) {
+    the_max_key_arr_ = new T[max_key_length_];
+    the_min_key_arr_ = new T[max_key_length_];
+    kEndSentinel_.key_arr_ = new T[max_key_length_];
     
-    std::fill(kEndSentinel_arr, kEndSentinel_arr + max_key_length,
+    std::fill(kEndSentinel_.key_arr_, kEndSentinel_.key_arr_ + max_key_length_,
         STR_VAL_MAX);
-    std::fill(the_max_key_arr_, the_max_key_arr_ + max_key_length,
+    std::fill(the_max_key_arr_, the_max_key_arr_ + max_key_length_,
         STR_VAL_MAX);
     the_min_key_arr_[0] = STR_VAL_MIN;
-    std::fill(the_min_key_arr_ + 1, the_min_key_arr_ + max_key_length, 0);
+    std::fill(the_min_key_arr_ + 1, the_min_key_arr_ + max_key_length_, 0);
     
   }
 
-  AlexDataNode(short level, int max_data_node_slots,
-               unsigned int max_key_length, model_node_type *parent,
+  AlexDataNode(short level, int max_data_node_slots, model_node_type *parent,
                const Compare& comp = Compare(), const Alloc& alloc = Alloc())
-      : AlexNode<T, P, Alloc>(level, true, parent, max_key_length),
+      : AlexNode<T, P, Alloc>(level, true, parent),
         key_less_(comp),
         allocator_(alloc),
         max_slots_(max_data_node_slots) {
-    T *kEndSentinel_arr = new T[max_key_length];
-    kEndSentinel_.key_arr_ = kEndSentinel_arr;
-    kEndSentinel_.max_key_length_ = max_key_length;
-    the_max_key_arr_ = new T[max_key_length];
-    the_min_key_arr_ = new T[max_key_length];
+    the_max_key_arr_ = new T[max_key_length_];
+    the_min_key_arr_ = new T[max_key_length_];
+    kEndSentinel_.key_arr_ = new T[max_key_length_];
 
-    std::fill(kEndSentinel_arr, kEndSentinel_arr + max_key_length,
+    std::fill(kEndSentinel_.key_arr_, kEndSentinel_.key_arr_ + max_key_length_,
         STR_VAL_MAX);
-    std::fill(the_max_key_arr_, the_max_key_arr_ + max_key_length,
+    std::fill(the_max_key_arr_, the_max_key_arr_ + max_key_length_,
         STR_VAL_MAX);
     the_min_key_arr_[0] = STR_VAL_MIN;
-    std::fill(the_min_key_arr_ + 1, the_min_key_arr_ + max_key_length, 0);
+    std::fill(the_min_key_arr_ + 1, the_min_key_arr_ + max_key_length_, 0);
     
   }
 
@@ -440,13 +411,16 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
      * since deletion of either one of the datanode
      * would result to other one's key's data pointer invalid
      * for similar reason, kEndSentinel_ also needs deep copying. */
-    the_max_key_arr_ = new T[other.max_key_length_];
-    the_min_key_arr_ = new T[other.max_key_length_];
-    std::copy(other.the_max_key_arr_, other.the_max_key_arr_ + other.max_key_length_,
+    the_max_key_arr_ = new T[max_key_length_];
+    the_min_key_arr_ = new T[max_key_length_];
+    kEndSentinel_.key_arr_ = new T[max_key_length_];
+
+    std::copy(other.the_max_key_arr_, other.the_max_key_arr_ + max_key_length_,
         the_max_key_arr_);
-    std::copy(other.the_min_key_arr_, other.the_min_key_arr_ + other.max_key_length_,
+    std::copy(other.the_min_key_arr_, other.the_min_key_arr_ + max_key_length_,
         the_min_key_arr_);
-    kEndSentinel_ = other.kEndSentinel_;
+    std::copy(other.kEndSentinel_.key_arr_, other.kEndSentinel_.key_arr_ + max_key_length_, 
+        kEndSentinel_.key_arr_);
 
     prev_leaf_.val_ = other.prev_leaf_.val_;
     next_leaf_.val_ = other.next_leaf_.val_;
@@ -806,12 +780,9 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     // Compute what the node's model would be
     LinearModel<T> model;
     if (existing_model == nullptr) {
-      model.max_key_length_ = values[0].first.max_key_length_;
       build_model(values, num_keys, &model);
     } else {
-      model.max_key_length_ = existing_model->max_key_length_;
-      model.a_ = new double[model.max_key_length_];
-      for (unsigned int i = 0; i < model.max_key_length_; i++) {
+      for (unsigned int i = 0; i < max_key_length_; i++) {
         model.a_[i] = existing_model->a_[i];
       }
       model.b_ = existing_model->b_;
@@ -910,12 +881,9 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 
     LinearModel<T> model;  // trained for full dense array
     if (existing_model == nullptr) {
-      model.max_key_length_ = values[0].first.max_key_length_;
       build_model(values, num_keys, &model);
     } else {
-      model.max_key_length_ = existing_model->max_key_length_;
-      model.a_ = new double[model.max_key_length_];
-      for (unsigned int i = 0; i < model.max_key_length_; i++) {
+      for (unsigned int i = 0; i < max_key_length_; i++) {
         model.a_[i] = existing_model->a_[i];
       }
       model.b_ = existing_model->b_;
@@ -955,7 +923,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     while (true) {
       int sample_data_capacity = std::max(
           static_cast<int>(sample_num_keys / density), sample_num_keys + 1);
-      LinearModel<T> sample_model(model.a_, model.b_, model.max_key_length_);
+      LinearModel<T> sample_model(model.a_, model.b_);
       sample_model.expand(static_cast<double>(sample_data_capacity) / num_keys);
 
       // Compute stats using the sample
@@ -1091,7 +1059,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     LinearModel<T> model;
     int num_actual_keys = 0;
     if (existing_model == nullptr) {
-      model.max_key_length_ = node->max_key_length_;
       const_iterator_type it(node, left);
       LinearModelBuilder<T> builder(&model);
       for (int i = 0; it.cur_idx_ < right && !it.is_end(); it++, i++) {
@@ -1101,9 +1068,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       builder.build();
     } else {
       num_actual_keys = node->num_keys_in_range(left, right);
-      model.max_key_length_ = existing_model->max_key_length_;
-      model.a_ = new double[model.max_key_length_];
-      for (unsigned int i = 0; i < model.max_key_length_; i++) {
+      for (unsigned int i = 0; i < max_key_length_; i++) {
         model.a_[i] = existing_model->a_[i];
       }
       model.b_ = existing_model->b_;
@@ -1202,7 +1167,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
                  const LinearModel<T>* pretrained_model = nullptr,
                  bool train_with_sample = false) {
     /* minimal condition checking. */
-    if (num_keys != 0) {assert(values[0].first.max_key_length_ == this->max_key_length_);}
     initialize(num_keys, kInitDensity_);
 
     if (num_keys == 0) {
@@ -1216,8 +1180,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 
     // Build model
     if (pretrained_model != nullptr) {
-      assert(pretrained_model->max_key_length_ == this->max_key_length_);
-      for (unsigned int i = 0; i < pretrained_model->max_key_length_; i++) {
+      for (unsigned int i = 0; i < max_key_length_; i++) {
         this->model_.a_[i] = pretrained_model->a_[i];
       }
       this->model_.b_ = pretrained_model->b_;
@@ -1286,15 +1249,15 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
                                     static_cast<double>(data_capacity_));
     contraction_threshold_ = data_capacity_ * kMinDensity_;
 
-    std::copy(values[0].first.key_arr_, values[0].first.key_arr_ + this->max_key_length_,
+    std::copy(values[0].first.key_arr_, values[0].first.key_arr_ + max_key_length_,
       this->min_key_.val_->key_arr_);
-    std::copy(values[num_keys-1].first.key_arr_, values[num_keys-1].first.key_arr_ + this->max_key_length_,
+    std::copy(values[num_keys-1].first.key_arr_, values[num_keys-1].first.key_arr_ + max_key_length_,
       this->max_key_.val_->key_arr_);
     
 #if DEBUG_PRINT
       //std::cout << values[0].first.key_arr_ << '\n';
       //std::cout << values[num_keys-1].first.key_arr_ << '\n';
-      //std::cout << "with max length as " << this->max_key_length_ << '\n';
+      //std::cout << "with max length as " << max_key_length_ << '\n';
       //std::cout << "min_key_(data_node) : " << this->min_key_.val_->key_arr_ << '\n';
       //std::cout << "max_key_(data_node) : " << this->max_key_.val_->key_arr_ << std::endl;
 #endif
@@ -1325,7 +1288,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     }
 #endif
     assert(left >= 0 && right <= node->data_capacity_);
-    assert(node->max_key_length_ == this->max_key_length_);
 
     // Build model
     int num_actual_keys = 0;
@@ -1338,9 +1300,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       }
       builder.build();
     } else {
-      assert(precomputed_model->max_key_length_ == this->max_key_length_);
       num_actual_keys = precomputed_num_actual_keys;
-      for (unsigned int i = 0; i < precomputed_model->max_key_length_; i++) {
+      for (unsigned int i = 0; i < max_key_length_; i++) {
         this->model_.a_[i] = precomputed_model->a_[i];
       }
       this->model_.b_ = precomputed_model->b_;
@@ -1370,7 +1331,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     int last_position = -1;
     int keys_remaining = num_keys_;
     const_iterator_type it(node, left);
-    for (unsigned int i = 0; i < this->max_key_length_; i++) {
+    for (unsigned int i = 0; i < max_key_length_; i++) {
       this->min_key_.val_->key_arr_[i] = it.key().key_arr_[i];
     }
     for (; it.cur_idx_ < right && !it.is_end(); it++) {
@@ -1418,7 +1379,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       ALEX_DATA_NODE_KEY_AT(i) = kEndSentinel_;
     }
 
-    for (unsigned int i = 0; i < this->max_key_length_; i++) {
+    for (unsigned int i = 0; i < max_key_length_; i++) {
       this->max_key_.val_->key_arr_[i] = ALEX_DATA_NODE_KEY_AT(last_position).key_arr_[i];
     }
 
@@ -1432,7 +1393,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   static void build_model(const V* values, int num_keys, LinearModel<T>* model,
                           bool use_sampling = false) {
     /* sampling only possible for integer, double type keys... for now.*/
-    if (use_sampling && (model->max_key_length_ == 1)) {
+    if (use_sampling && (max_key_length_ == 1)) {
       build_model_sampling(values, num_keys, model);
       return;
     }
@@ -1479,15 +1440,15 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       builder.add(values[i].first, i);
     }
     builder.build();
-    double prev_a[model->max_key_length_] = {0.0};
-    for (unsigned int i = 0; i < model->max_key_length_; i++) {
+    double prev_a[max_key_length_] = {0.0};
+    for (unsigned int i = 0; i < max_key_length_; i++) {
       prev_a[i] = model->a_[i];
     }
     double prev_b = model->b_;
     if (verbose) {
       std::cout << "Build index, sample size: " << num_keys / step_size
                 << " a: (";
-      for (unsigned int i = 0; i < model->max_key_length_; i++) {
+      for (unsigned int i = 0; i < max_key_length_; i++) {
         std::cout << prev_a[i];
       } 
       std::cout << "), b: " << prev_b << std::endl;
@@ -1508,8 +1469,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       }
       builder.build();
 
-      double rel_change_in_a[model->max_key_length_] = {0.0};
-      for (unsigned int i = 0; i < model->max_key_length_; i++) {
+      double rel_change_in_a[max_key_length_] = {0.0};
+      for (unsigned int i = 0; i < max_key_length_; i++) {
         rel_change_in_a[i] = std::abs((model->a_[i] - prev_a[i]) / prev_a[i]);
       }
       double abs_change_in_b = std::abs(model->b_ - prev_b);
@@ -1517,18 +1478,18 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       if (verbose) {
         std::cout << "Build index, sample size: " << num_keys / step_size
                   << " new (a, b): (";
-        for (unsigned int i = 0; i < model->max_key_length_; i++) {
+        for (unsigned int i = 0; i < max_key_length_; i++) {
           std::cout << model->a_[i];
         }
         std::cout << ", " << model->b_ << ") relative change : (";
-        for (unsigned int i = 0; i < model->max_key_length_; i++) {
+        for (unsigned int i = 0; i < max_key_length_; i++) {
           std::cout << rel_change_in_a[i];
         }
         std::cout << ", " << rel_change_in_b << ")"
                   << std::endl;
       }
       char threshold = 1;
-      for (unsigned int i = 0; i < model->max_key_length_; i++) {
+      for (unsigned int i = 0; i < max_key_length_; i++) {
         if (rel_change_in_a[i] > rel_change_threshold) {
           threshold = 0;
           break;
@@ -1539,7 +1500,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
            abs_change_in_b < abs_change_threshold)) {
         return;
       }
-      for (unsigned int i = 0; i < model->max_key_length_; i++) {
+      for (unsigned int i = 0; i < max_key_length_; i++) {
         prev_a[i] = model->a_[i];
       }
       prev_b = model->b_;
@@ -1898,8 +1859,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     AV* new_data_slots = new (atomic_value_allocator().allocate(new_data_capacity))
         AV[new_data_capacity];
 #endif
-    LinearModel<T> new_model(this->max_key_length_);
-    std::copy(this->model_.a_, this->model_.a_ + this->max_key_length_, new_model.a_);
+    LinearModel<T> new_model;
+    std::copy(this->model_.a_, this->model_.a_ + max_key_length_, new_model.a_);
     new_model.b_ = this->model_.b_;
     
 
@@ -2348,65 +2309,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     return num_packed;
   }
 
-  /*** Debugging ***/
-
-  bool validate_structure(bool verbose = false) const {
-    if (this->cost_ < 0 || std::isnan(this->cost_)) {
-      std::cout << "[Data node cost is invalid value]"
-                << " node addr: " << this << ", node level: " << this->level_
-                << ", cost: " << this->cost_ << std::endl;
-      return false;
-    }
-    for (int i = 0; i < data_capacity_ - 1; i++) {
-      if (key_greater(ALEX_DATA_NODE_KEY_AT(i), ALEX_DATA_NODE_KEY_AT(i + 1))) {
-        if (verbose) {
-          std::cout << "Keys should be in non-increasing order" << std::endl;
-        }
-        return false;
-      } else if (key_less(ALEX_DATA_NODE_KEY_AT(i),
-                          ALEX_DATA_NODE_KEY_AT(i + 1)) &&
-                 !check_exists(i)) {
-        if (verbose) {
-          std::cout << "The last key of a certain value should not be a gap"
-                    << std::endl;
-        }
-        return false;
-      }
-    }
-    AlexKey<T> end = ALEX_DATA_NODE_KEY_AT(data_capacity_ - 1);
-    char same = 0;
-    for (int i = 0; i < this->max_key_length_; i++) {
-      if (end.key_arr_[i] != kEndSentinel_.key_arr_[i]) {
-        same = 1;
-        break;
-      }
-    }
-    if (same && check_exists(data_capacity_ - 1)) {
-      if (verbose) {
-        std::cout << "The sentinel should not be a valid key" << std::endl;
-      }
-      return false;
-    }
-    if (!same && !check_exists(data_capacity_ - 1)) {
-      if (verbose) {
-        std::cout << "The last key should be a valid key" << std::endl;
-      }
-      return false;
-    }
-    uint64_t num_bitmap_ones = 0;
-    for (int i = 0; i < bitmap_size_; i++) {
-      num_bitmap_ones += count_ones(bitmap_[i]);
-    }
-    if (static_cast<int>(num_bitmap_ones) != num_keys_) {
-      if (verbose) {
-        std::cout << "Number of ones in bitmap should match num_keys"
-                  << std::endl;
-      }
-      return false;
-    }
-    return true;
-  }
-
   // Check that a key exists in the key/data_slots
   // If validate_bitmap is true, confirm that the corresponding position in the
   // bitmap is correctly set to 1
@@ -2427,7 +2329,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
            std::to_string(expansion_threshold_) + "\n";
     for (int i = 0; i < data_capacity_; i++) {
       AlexKey<T> cur_key = ALEX_DATA_NODE_KEY_AT(i);
-      for (int j = 0; j < cur_key.max_key_length_; j++) {
+      for (int j = 0; j < max_key_length_; j++) {
         str += (std::to_string(cur_key.key_arr_[j]) + " ");
       }
       str += "\n";

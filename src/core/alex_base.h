@@ -87,31 +87,22 @@ typedef RCUStatus rcu_status_t;
 typedef Result result_t;
 typedef IndexConfig index_config_t;
 
-/*** MAY BE USED UNDER CIRCUMSTANCES ***/
-//extern unsigned int max_key_length;
+unsigned int max_key_length_ = 1; //length of kesys.
 
 /* AlexKey class. */
 template<class T>
 class AlexKey {
  public:
   T *key_arr_ = nullptr;
-  unsigned int max_key_length_ = 0;
 
-  AlexKey() {}
+  AlexKey() = default;
 
-  AlexKey(T *key_arr, unsigned int max_key_length)
-      : max_key_length_(max_key_length) {
+  AlexKey(T *key_arr) {
     key_arr_ = new T[max_key_length_];
     std::copy(key_arr, key_arr + max_key_length_, key_arr_);
   }
 
-  AlexKey(unsigned int max_key_length)
-      : max_key_length_(max_key_length) {
-    key_arr_ = new T[max_key_length_]();
-  }
-
-  AlexKey(const AlexKey<T>& other)
-      : max_key_length_(other.max_key_length_) {
+  AlexKey(const AlexKey<T>& other) {
     key_arr_ = new T[max_key_length_]();
     std::copy(other.key_arr_, other.key_arr_ + max_key_length_, key_arr_);
   }
@@ -121,19 +112,18 @@ class AlexKey {
   }
 
   AlexKey<T>& operator=(const AlexKey<T>& other) {
+    assert(other.key_arr_ != nullptr);
     if (this != &other) {
-      if ((key_arr_ == nullptr) || (max_key_length_ != other.max_key_length_)) {
-        delete[] key_arr_;
-        key_arr_ = new T[other.max_key_length_];
+      if ((key_arr_ == nullptr)) {
+        key_arr_ = new T[max_key_length_];
       }
-      max_key_length_ = other.max_key_length_;
-      std::copy(other.key_arr_, other.key_arr_ + other.max_key_length_, key_arr_);
+      std::copy(other.key_arr_, other.key_arr_ + max_key_length_, key_arr_);
     }
     return *this;
   }
 
   bool operator< (const AlexKey<T>& other) const {
-    assert(max_key_length_ == other.max_key_length_);
+    assert(key_arr_ != nullptr && other.key_arr_ != nullptr);
     for (unsigned int i = 0; i < max_key_length_; i++) {
       if (key_arr_[i] < other.key_arr_[i]) {return true;}
       else if (key_arr_[i] > other.key_arr_[i]) {return false;}
@@ -155,11 +145,12 @@ class LinearModel {
  public:
   double *a_ = nullptr;  // slope, we MUST initialize.
   double b_ = 0.0;  // intercept, we MUST initialize by ourself.
-  unsigned int max_key_length_ = 0; 
 
-  LinearModel() = default; 
+  LinearModel() {
+    a_ = new double[max_key_length_]();
+  }
 
-  LinearModel(double a[], double b, unsigned int max_key_length) : max_key_length_(max_key_length) {
+  LinearModel(double a[], double b) {
     a_ = new double[max_key_length_];
     for (unsigned int i = 0; i < max_key_length_; i++) {
       a_[i] = a[i];
@@ -167,17 +158,11 @@ class LinearModel {
     b_ = b;
   }
 
-  LinearModel(unsigned int max_key_length) : max_key_length_(max_key_length) {
-    a_ = new double[max_key_length_]();
-    b_ = 0.0;
-  }
-
   ~LinearModel() {
     delete[] a_;
   }
 
-  explicit LinearModel(const LinearModel& other) : 
-    b_(other.b_), max_key_length_(other.max_key_length_) {
+  explicit LinearModel(const LinearModel& other) : b_(other.b_) {
       a_ = new double[max_key_length_];
       for (unsigned int i = 0; i < max_key_length_; i++) {
         a_[i] = other.a_[i];
@@ -186,11 +171,9 @@ class LinearModel {
 
   LinearModel& operator=(const LinearModel& other) {
     if (this != &other) {
-      delete[] a_;
-      max_key_length_ = other.max_key_length_;
       b_ = other.b_;
-      a_ = new double[other.max_key_length_];
-      std::copy(other.a_, other.a_ + other.max_key_length_, a_);
+      if (a_ == nullptr) a_ = new double[max_key_length_];
+      std::copy(other.a_, other.a_ + max_key_length_, a_);
     }
     return *this;
   }
@@ -204,8 +187,7 @@ class LinearModel {
   }
 
   inline int predict(const AlexKey<T> &key) const {
-    assert(a_ != nullptr);
-    assert (max_key_length_ == key.max_key_length_);
+    assert(a_ != nullptr && key.key_arr_ != nullptr);
     double result = 0.0;
     for (unsigned int i = 0; i < max_key_length_; i++) {
       result += static_cast<double>(key.key_arr_[i]) * a_[i];
@@ -214,8 +196,7 @@ class LinearModel {
   }
 
   inline double predict_double(const AlexKey<T> &key) const {
-    assert(a_ != nullptr);
-    assert (max_key_length_ == key.max_key_length_);
+    assert(a_ != nullptr && key.key_arr_ != nullptr);
     double result = 0.0;
     for (unsigned int i = 0; i < max_key_length_; i++) {
       result += static_cast<double>(key.key_arr_[i]) * a_[i];
@@ -228,13 +209,12 @@ class LinearModel {
 template<class T>
 class LinearModelBuilder {
  public:
-  LinearModel<T>* model_;
+  LinearModel<T>* model_ = nullptr;
 
   LinearModelBuilder(LinearModel<T>* model) : model_(model) {}
 
   inline void add(const AlexKey<T>& x, double y) {
-    assert(model_->max_key_length_ == x.max_key_length_);
-    if (model_->max_key_length_ == 1) { //single numeric
+    if (max_key_length_ == 1) { //single numeric
       count_++;
       x_sum_ += static_cast<long double>(x.key_arr_[0]);
       y_sum_ += static_cast<long double>(y);
@@ -252,7 +232,9 @@ class LinearModelBuilder {
   }
 
   void build() {
-    if (model_->max_key_length_ == 1) { /* single dimension */     
+    assert(model_->a_ != nullptr);
+
+    if (max_key_length_ == 1) { /* single dimension */     
       if (count_ <= 1) {
         model_->a_[0] = 0;
         model_->b_ = static_cast<double>(y_sum_);
@@ -285,7 +267,7 @@ class LinearModelBuilder {
     //from here, it is about string.
 
     if (positions_.size() <= 1) {
-      for (unsigned int i = 0; i < model_->max_key_length_; i++) {
+      for (unsigned int i = 0; i < max_key_length_; i++) {
         model_->a_[i] = 0.0;
       }
       if (positions_.size() == 0) {model_->b_ = 0.0;}
@@ -301,7 +283,7 @@ class LinearModelBuilder {
     }
 
     std::vector<size_t> useful_feat_index_;
-    for (size_t feat_i = 0; feat_i < model_->max_key_length_; feat_i++) {
+    for (size_t feat_i = 0; feat_i < max_key_length_; feat_i++) {
       double first_val = (double) training_keys_[0][feat_i];
       for (size_t key_i = 0; key_i < training_keys_.size(); key_i += step) {
         if ((double) training_keys_[key_i][feat_i] != first_val) {
@@ -376,7 +358,7 @@ class LinearModelBuilder {
       }
 
       // set weights to all zero
-      for (size_t weight_i = 0; weight_i < model_->max_key_length_; weight_i++) {
+      for (size_t weight_i = 0; weight_i < max_key_length_; weight_i++) {
         model_->a_[weight_i] = 0;
       }
       // set weights of useful features
@@ -397,7 +379,7 @@ class LinearModelBuilder {
       //for debugging
       //alex::coutLock.lock();
       //std::cout << "current a_ (LMB build): ";
-      //for (unsigned int i = 0; i < model_->max_key_length_; i++) {
+      //for (unsigned int i = 0; i < max_key_length_; i++) {
       //  std::cout << model_->a_[i] << " ";
       //}
       //std::cout << ", current b_ (LMB build) :" << model_->b_ << std::endl;
@@ -429,12 +411,10 @@ struct AlexCompare {
     static_assert(
         std::is_arithmetic<T1>::value && std::is_arithmetic<T2>::value,
         "Comparison types must be numeric.");
-    assert(x.max_key_length_ == y.max_key_length_);
-    auto x_key_ptr_ = x.key_arr_;
-    auto y_key_ptr_ = y.key_arr_;
-    for (unsigned int i = 0; i < x.max_key_length_; i++) {
-      if (x_key_ptr_[i] < y_key_ptr_[i]) {return true;}
-      else if (x_key_ptr_[i] > y_key_ptr_[i]) {return false;}
+    assert(x.key_arr_ != nullptr && y.key_arr_ != nullptr);
+    for (unsigned int i = 0; i < max_key_length_; i++) {
+      if (x.key_arr_[i] < y.key_arr_[i]) {return true;}
+      else if (x.key_arr_[i] > y.key_arr_[i]) {return false;}
     }
     return false;
   }
