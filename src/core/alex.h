@@ -1953,26 +1953,36 @@ public:
     }
     else { //succeeded, but needs to modify
       if (fail == 4) { //need to expand
-        expandParam *param = new expandParam();
-        param->leaf = leaf;
-        param->worker_id = worker_id;
-        pthread_t pthread;
+        if (cur_bg_num.load() < config.max_bgnum) { //but only when we're not runnign max bg threads
+          cur_bg_num++;
+          memory_fence();
+          expandParam *param = new expandParam();
+          param->leaf = leaf;
+          param->worker_id = worker_id;
+          pthread_t pthread;
 
-        pthread_create(&pthread, nullptr, expand_handler, (void *)param);
-        pthread_detach(pthread); //detach since it's not joined.
+          pthread_create(&pthread, nullptr, expand_handler, (void *)param);
+          pthread_detach(pthread); //detach since it's not joined.
+        }
+        else {pthread_mutex_unlock(&leaf->insert_mutex);}
       }
       else {
-        //create thread that handles modification and let it handle
-        alexIParam *param = new alexIParam();
-        param->leaf = leaf;
-        param->worker_id = worker_id;
-        param->bucketID = traversal_path.back().bucketID;
-        param->fail = fail;
-        param->this_ptr = this;
-        pthread_t pthread;
+        if (fail == 5 || cur_bg_num.load() < config.max_bgnum) {
+          //create thread that handles modification and let it handle
+          cur_bg_num++;
+          memory_fence();
+          alexIParam *param = new alexIParam();
+          param->leaf = leaf;
+          param->worker_id = worker_id;
+          param->bucketID = traversal_path.back().bucketID;
+          param->fail = fail;
+          param->this_ptr = this;
+          pthread_t pthread;
 
-        pthread_create(&pthread, nullptr, insert_fail_handler, (void *)param);   
-        pthread_detach(pthread); //detach since it's not joined
+          pthread_create(&pthread, nullptr, insert_fail_handler, (void *)param);   
+          pthread_detach(pthread); //detach since it's not joined
+        }
+        else {pthread_mutex_unlock(&leaf->insert_mutex);}
       }
 
       //original thread returns and retry later. (need to rcu_progress)
@@ -2045,6 +2055,8 @@ public:
     pthread_mutex_unlock(&leaf->insert_mutex);
     memory_fence();
     delete Eparam;
+    cur_bg_num--;
+    memory_fence();
     pthread_exit(nullptr);
   }
 
@@ -2135,6 +2147,8 @@ public:
 
     //return successfully.
     delete Iparam;
+    cur_bg_num--;
+    memory_fence();
     pthread_exit(nullptr);
   }
 

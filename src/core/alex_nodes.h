@@ -1809,6 +1809,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     }
 
     // Check if node is full (based on expansion_threshold)
+    if (num_keys_ == data_capacity_) {
+      //MUST do some modification.
+      return {{5, insertion_position}, {this, nullptr}};
+    }
     if (num_keys_ >= expansion_threshold_) {
       if (significant_cost_deviation()) {
         return {{1, insertion_position}, {this, nullptr}};

@@ -45,7 +45,8 @@ bool print_key_stats = false;
 bool strict_read = false;
 bool strict_insert = false;
 uint64_t total_num_keys = 1;
-uint32_t td_num = 1;
+uint32_t fg_num = 1;
+uint32_t bg_num = 10000;
 uint64_t num_actual_ops_perth;
 uint64_t num_actual_lookups_perth;
 uint64_t num_actual_inserts_perth;
@@ -57,7 +58,8 @@ uint64_t num_actual_inserts_perth;
  * --init_num_keys          number of keys to bulk load with
  * --total_num_keys         total number of keys in the keys file
  * --batch_size             number of operations (lookup or insert) per batch for all threads
- * --thread_num             number of threads
+ * --fg_thread_num          number of foreground threads
+ * --bg_thread_num          max number of background threads (for model modification)
  * 
  * Optional flags:
  * --insert_frac            fraction of operations that are inserts (instead of lookups)
@@ -77,7 +79,8 @@ int main(int argc, char* argv[]) {
   auto init_num_keys = stoi(get_required(flags, "init_num_keys"));
   total_num_keys = stoi(get_required(flags, "total_num_keys"));
   auto batch_size = stoi(get_required(flags, "batch_size"));
-  td_num = stoi(get_required(flags, "thread_num"));
+  fg_num = stoi(get_required(flags, "fg_thread_num"));
+  bg_num = stoi(get_required(flags, "bg_thread_num"));
   auto insert_frac = stod(get_with_default(flags, "insert_frac", "0.5"));
   lookup_distribution =
       get_with_default(flags, "lookup_distribution", "zipf");
@@ -158,12 +161,13 @@ int main(int argc, char* argv[]) {
   int batch_no = 0;
   double cumulative_time = 0.0;
   long long cumulative_operations = 0;
-  alex::config.worker_n = td_num;
+  alex::config.worker_n = fg_num;
+  alex::config.max_bgnum = bg_num;
   std::cout << std::scientific;
   std::cout << std::setprecision(3);
   alex::rcu_alloc();
 #if PROFILE
-  alex::profileStats.profileInit(td_num);
+  alex::profileStats.profileInit(fg_num);
 #endif
 
   // Run workload
@@ -178,16 +182,16 @@ int main(int argc, char* argv[]) {
     //while following insertion ratio.
 
     //initialize threads
-    pthread_t threads[td_num];
-    fg_param_t fg_params[td_num];
+    pthread_t threads[fg_num];
+    fg_param_t fg_params[fg_num];
     running = false;
     ready_threads.store(0);
 
-    num_actual_lookups_perth = num_lookups_per_batch / td_num;
-    num_actual_inserts_perth = std::min(num_inserts_per_batch / td_num , (total_num_keys - inserted_range) / td_num);
+    num_actual_lookups_perth = num_lookups_per_batch / fg_num;
+    num_actual_inserts_perth = std::min(num_inserts_per_batch / fg_num , (total_num_keys - inserted_range) / fg_num);
     num_actual_ops_perth = num_actual_lookups_perth + num_actual_inserts_perth;
     
-    for (size_t worker_i = 0; worker_i < td_num; worker_i++) {
+    for (size_t worker_i = 0; worker_i < fg_num; worker_i++) {
       fg_params[worker_i].thread_id = worker_i;
       int ret = pthread_create(&threads[worker_i], nullptr, run_fg,
                               (void *)&fg_params[worker_i]);
@@ -197,7 +201,7 @@ int main(int argc, char* argv[]) {
       }
     }
 
-    while(ready_threads < td_num) {sleep(1);}
+    while(ready_threads < fg_num) {sleep(1);}
     //alex::coutLock.lock();
     std::cout << "multithreading starts for batch : " << batch_no << std::endl;
     //alex::coutLock.unlock();
@@ -205,7 +209,7 @@ int main(int argc, char* argv[]) {
     running = true;
 
     void *status;
-    for (size_t i = 0; i < td_num; i++) {
+    for (size_t i = 0; i < fg_num; i++) {
       int rc = pthread_join(threads[i], &status);
       if (rc) {
         std::cout << "Error : unable to join, " << rc << std::endl;
@@ -216,14 +220,14 @@ int main(int argc, char* argv[]) {
     running = false;
     auto batch_end_time = std::chrono::high_resolution_clock::now();
     std::cout << "all joined for batch : " << batch_no << std::endl;
-    inserted_range += num_actual_inserts_perth * td_num;
+    inserted_range += num_actual_inserts_perth * fg_num;
 
     if (print_batch_stats) {
-      int num_batch_operations = num_lookups_per_batch + num_actual_inserts_perth * td_num;
+      int num_batch_operations = num_lookups_per_batch + num_actual_inserts_perth * fg_num;
       double batch_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
                             batch_end_time - batch_start_time)
                             .count();
-      cumulative_operations += num_actual_ops_perth * td_num;
+      cumulative_operations += num_actual_ops_perth * fg_num;
       cumulative_time += batch_time;
       std::cout << "Batch " << batch_no
                 << ", cumulative ops: " << cumulative_operations

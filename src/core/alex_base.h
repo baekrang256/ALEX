@@ -34,6 +34,7 @@
 #endif
 #include <bitset>
 #include <cassert>
+#include <condition_variable>
 #ifdef _WIN32
 #include <intrin.h>
 #include <limits.h>
@@ -1629,12 +1630,14 @@ struct IndexConfig {
   double buffer_size_tolerance = 3;
   size_t buffer_compact_threshold = 8;
   size_t worker_n = 0;
+  uint32_t max_bgnum = 10000;
   std::unique_ptr<rcu_status_t[]> rcu_status;
   volatile bool exited = false;
 };
 
 index_config_t config;
 std::mutex config_mutex;
+std::atomic<uint32_t> cur_bg_num{0};
 
 // TODO replace it with user space RCU (e.g., qsbr)
 void rcu_init() {
