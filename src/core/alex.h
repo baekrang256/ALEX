@@ -473,8 +473,6 @@ class Alex {
         alex::coutLock.unlock();
 #endif
 
-      AlexKey<T> min_tmp_key(istats_.key_domain_min_);
-      AlexKey<T> max_tmp_key(istats_.key_domain_max_);
       AlexKey<T> *cur_node_min_key = cur->min_key_.read();
       memory_fence();
       AlexKey<T> *cur_node_max_key = cur->max_key_.read();
@@ -483,25 +481,33 @@ class Alex {
       int smaller_than_min = key_less_(key, *(cur_node_min_key));
       int larger_than_max = key_less_(*(cur_node_max_key), key);
 
+      bool started_in_empty = true;
       if (mode == 0) {//for lookup related get_leaf
         while (smaller_than_min || larger_than_max) {
           if (smaller_than_min && larger_than_max) {
             //empty node. move according to direction.
             //could start at empty node, in this case, move left unless we're at the left end at start.
             was_walking_in_empty = 1;
-            if (dir == 1 || (dir == 0 && bucketID == 0)) {
+            if (dir == 1) {
               bucketID = bucketID - (bucketID % cur_duplication_factor) + cur_duplication_factor;
               if (bucketID > num_children-1) {return nullptr;} //out of bound
               dir = 1;
             }
             else {
               bucketID = bucketID - (bucketID % cur_duplication_factor);
-              if (bucketID == 0) {return nullptr;} //out of bound
-              bucketID -= 1;
-              dir = -1;
+              if (bucketID == 0) {
+                if (started_in_empty) { //give a chance.
+                  dir = 1;
+                } else return nullptr;
+              }
+              else {
+                bucketID -= 1;
+                dir = -1;
+              }
             }
           }
           else if (smaller_than_min) {
+            started_in_empty = false;
             bucketID = bucketID - (bucketID % cur_duplication_factor);
             if (bucketID == 0) {return nullptr;}
             if (dir == 1) {
@@ -522,6 +528,7 @@ class Alex {
             was_walking_in_empty = 0;
           }
           else if (larger_than_max) {
+            started_in_empty = false;
             bucketID = bucketID - (bucketID % cur_duplication_factor) + cur_duplication_factor;
             if (bucketID > num_children-1) {return nullptr;}
             if (dir == -1) {
@@ -1349,7 +1356,7 @@ EmptyNodeStart:
         while (true) {
           fanout_tree::compute_level<T, P>(
             values, num_keys, total_keys, used_fanout_tree_nodes,
-            best_fanout_tree_depth, max_data_node_keys,
+            best_fanout_tree_depth, node->model_, max_data_node_keys,
             params_.expected_insert_frac, params_.approximate_model_computation,
             params_.approximate_cost_computation);
           
@@ -1406,16 +1413,6 @@ EmptyNodeStart:
             static_cast<uint8_t>(best_fanout_tree_depth - tree_node.level);
         int repeats = 1 << child_node->duplication_factor_;
 #if DEBUG_PRINT
-        //cumu_repeat += repeats;
-        //std::cout << "started finding boundary..." << std::endl;
-        //std::cout << "for left_value with : " << left_value << std::endl;
-        //std::cout << "and right_value with : " << right_value << std::endl;
-        //std::cout << "so covering indexes are : " << cumu_repeat - repeats << "~" << cumu_repeat - 1 << std::endl;
-#endif
-
-        //finds left/right boundary using tree_node.
-#if DEBUG_PRINT
-        std::cout << "finished finding boundary..." << std::endl;
         std::cout << "left boundary is : ";
         if (tree_node.left_boundary == num_keys) {
           for (unsigned int i = 0; i < max_key_length_; i++) {
@@ -1441,6 +1438,7 @@ EmptyNodeStart:
 #if DEBUG_PRINT
         //printf("l_idx : %d, f_idx : %d, num_keys : %d\n", l_idx, f_idx, num_keys);
 #endif
+        if (num_keys == 0) {std::cout << "shouldn't happen" << std::endl;}
         if (num_keys == 1) {
           child_model_builder.add(values[tree_node.left_boundary].first, 1.0);
         }
@@ -2073,7 +2071,7 @@ public:
 #if DEBUG_PRINT
     alex::coutLock.lock();
     std::cout << "t" << worker_id << " - failed and made a thread to modify node\n";
-    std::cout << "parent is : " << parent << '\n'
+    std::cout << "parent is : " << parent << '\n';
     std::cout << "bucketID : " << bucketID << std::endl;
     alex::coutLock.unlock();
 #endif
@@ -2229,7 +2227,7 @@ public:
     std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
     std::cout << "split_downwards parent children_\n";
     for (int i = 0; i < parent->num_children_; i++) {
-      std::cout << i << " : " << parent_new_children[i] << '\n';
+      std::cout << i << " : " << parent->children_[i] << '\n';
     }
     std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
     std::cout << "min_key_(model_node) : " << new_node->min_key_.val_->key_arr_ << '\n';

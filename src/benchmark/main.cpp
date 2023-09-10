@@ -433,14 +433,14 @@ void *run_fg(void *param) {
   while (!pending_op.empty()) {
     auto op_param = pending_op.front();
     pending_op.pop_front();
-#if DEBUG_PRINT
-    alex::coutLock.lock();
-    std::cout << '\n';
-    //std::cout << "current insertion_index is : " << insertion_index << std::endl;
-    std::cout << "worker id : " << thread_id << " re-inserting " << keys[std::get<0>(op_param)].key_arr_ << std::endl;
-    alex::coutLock.unlock();
-#endif
     if (std::get<0>(op_param)) {//is insert
+#if DEBUG_PRINT
+      alex::coutLock.lock();
+      std::cout << '\n';
+      //std::cout << "current insertion_index is : " << insertion_index << std::endl;
+      std::cout << "worker id : " << thread_id << " re-inserting " << keys[std::get<1>(op_param)].key_arr_ << std::endl;
+      alex::coutLock.unlock();
+#endif
       std::tuple<alex::Alex<KEY_TYPE, PAYLOAD_TYPE>::Iterator, 
                 bool,
                 alex::Alex<KEY_TYPE, PAYLOAD_TYPE>::model_node_type *> insert_result
@@ -498,7 +498,7 @@ void *run_fg(void *param) {
       alex::coutLock.lock();
       std::cout << '\n';
       //std::cout << "current read_cnt is : " << read_cnt << std::endl;
-      std::cout << "worker id : " << thread_id << " reading lookup key ";
+      std::cout << "worker id : " << thread_id << " re-reading lookup key ";
       for (unsigned int k = 0; k < max_key_length; k++) {
         std::cout << key.key_arr_[k];
       }
