@@ -1062,6 +1062,7 @@ class Alex {
       
       
 #if DEBUG_PRINT
+      std::cout << "info for model node : " << model_node << '\n';
       std::cout << "pivot_key_(model_node) : " << model_node->pivot_key_.key_arr_ << '\n';
       for (int i = 0; i < fanout; i++) {
         std::cout << i << "'s initial pointer value is : " << model_node->children_[i] << '\n';
@@ -1640,9 +1641,10 @@ public:
     model_node_type* parent = leaf->parent_;
 #if DEBUG_PRINT
     alex::coutLock.lock();
-    std::cout << "t" << worker_id << " - failed and made a thread to modify node\n";
+    std::cout << "t" << worker_id << " - made a thread to modify node\n";
     std::cout << "parent is : " << parent << '\n';
-    std::cout << "bucketID : " << bucketID << std::endl;
+    std::cout << "bucketID : " << bucketID << '\n';
+    std::cout << "reason is : " << fail << std::endl;
     alex::coutLock.unlock();
 #endif
 
