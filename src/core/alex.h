@@ -455,7 +455,6 @@ class Alex {
       int num_children = node->num_children_;
       double bucketID_prediction = node->model_.predict_double(key);
       int bucketID = static_cast<int>(bucketID_prediction);
-      int dir = 0; //direction of seraching between buckets. 1 for right, -1 for left.
       bucketID =
           std::min<int>(std::max<int>(bucketID, 0), num_children - 1);
       cur = cur_children[bucketID];
@@ -463,467 +462,39 @@ class Alex {
       int cur_duplication_factor = 1 << cur->duplication_factor_;
       memory_fence();
       bucketID = bucketID - (bucketID % cur_duplication_factor);
-
-#if DEBUG_PRINT
-        alex::coutLock.lock();
-        std::cout << "t" << worker_id << " - ";
-        std::cout << "initial bucket : " << bucketID << std::endl;
-        alex::coutLock.unlock();
-#endif
-      AlexKey<T> *cur_node_min_key = cur->min_key_.read();
-      memory_fence();
-      AlexKey<T> *cur_node_max_key = cur->max_key_.read();
-      memory_fence();
+      AlexKey<T> *cur_pivot_key = &(cur->pivot_key_);
 #if DEBUG_PRINT
       alex::coutLock.lock();
       std::cout << "t" << worker_id << " - ";
-      std::cout << "minkey : " << cur_node_min_key->key_arr_ << '\n';
-      std::cout << "maxkey : " << cur_node_max_key->key_arr_ << std::endl;
+      std::cout << "initial bucket : " << bucketID << '\n';
+      std::cout << "t" << worker_id << " - ";
+      std::cout << "pivot_key_ : " << cur_pivot_key->key_arr_ << std::endl;
       alex::coutLock.unlock();
 #endif
-      int was_walking_in_empty = 0;
-      int smaller_than_min = key_less_(key, *(cur_node_min_key));
-      int larger_than_max = key_less_(*(cur_node_max_key), key);
-
-      bool started_in_empty = true;
-      if (mode == 0) {//for lookup related get_leaf
-        while (smaller_than_min || larger_than_max) {
-          if (smaller_than_min && larger_than_max) {
-            //empty node. move according to direction.
-            //could start at empty node, in this case, move left unless we're at the left end at start.
-            was_walking_in_empty = 1;
-            if (dir == 1) {
-              bucketID = bucketID - (bucketID % cur_duplication_factor) + cur_duplication_factor;
-              if (bucketID > num_children-1) {return nullptr;} //out of bound
-              dir = 1;
-            }
-            else {
-              bucketID = bucketID - (bucketID % cur_duplication_factor);
-              if (bucketID == 0) {
-                if (started_in_empty) { //give a chance.
-                  dir = 1;
-                } else return nullptr;
-              }
-              else {
-                bucketID -= 1;
-                dir = -1;
-              }
-            }
-          }
-          else if (smaller_than_min) {
-            started_in_empty = false;
-            bucketID = bucketID - (bucketID % cur_duplication_factor);
-            if (bucketID == 0) {return nullptr;}
-            if (dir == 1) {
-              //it could be the case where it started from empty node, and initialized direction was wrong
-              //in this case, we allow to go backward.
-              if (!was_walking_in_empty) {
-#if DEBUG_PRINT
-                alex::coutLock.lock();
-                std::cout << "t" << worker_id << " - ";
-                std::cout << "yo infinite loop baby!" << std::endl;
-                alex::coutLock.unlock();
-#endif
-                return nullptr;
-              }
-            }
-            bucketID -= 1;
-            dir = -1;
-            was_walking_in_empty = 0;
-          }
-          else if (larger_than_max) {
-            started_in_empty = false;
-            bucketID = bucketID - (bucketID % cur_duplication_factor) + cur_duplication_factor;
-            if (bucketID > num_children-1) {return nullptr;}
-            if (dir == -1) {
-              if (!was_walking_in_empty) {
-#if DEBUG_PRINT
-                alex::coutLock.lock();
-                std::cout << "t" << worker_id << " - ";
-                std::cout << "yo infinite loop baby!" << std::endl;
-                alex::coutLock.unlock();
-#endif
-              }
-            }
-            dir = 1;
-            was_walking_in_empty = 0;
-          }
-
-          cur = cur_children[bucketID];
-          memory_fence();
-          cur_duplication_factor = 1 << cur->duplication_factor_;
-          memory_fence();
-          cur_node_min_key = cur->min_key_.read();
-          memory_fence();
-          cur_node_max_key = cur->max_key_.read();
-          memory_fence();
-          smaller_than_min = key_less_(key, *(cur_node_min_key));
-          larger_than_max = key_less_(*(cur_node_max_key), key);
-        }
-#if DEBUG_PRINT
-        alex::coutLock.lock();
-        std::cout << "t" << worker_id << " - ";
-        std::cout << "decided to enter bucketID : " << bucketID << " with pointer : " << cur << '\n';
-        std::cout << "bucket's min_key is " << cur_node_min_key->key_arr_
-                  << " and max_key is " << cur_node_max_key->key_arr_ << std::endl;
-        alex::coutLock.unlock();
-#endif
+      bool smaller_than_pivot = key_less_(key, *(cur_pivot_key));
+      while (smaller_than_pivot) {
+        //keep going left.
+        if (bucketID == 0) {return nullptr;} //error
+        bucketID -= 1;
+        cur = cur_children[bucketID];
+        cur_duplication_factor = 1 << cur->duplication_factor_;
+        bucketID = bucketID - (bucketID % cur_duplication_factor);
+        cur_pivot_key = &(cur->pivot_key_);
+        smaller_than_pivot = key_less_(key, *(cur_pivot_key));
       }
-      else if (mode == 1) { //for insert.
-        /*we need to check if inserting the key won't make collision with other node's boundary.
-          If it does, we need to move to another bucket and insert it. */
-#if DEBUG_PRINT
-        alex::coutLock.lock();
-        std::cout << "t" << worker_id << " - ";
-        std::cout << "validating insertion" << std::endl;
-        alex::coutLock.unlock();
-#endif
-        //we first go all the way to left until min_key is smaller than our key.
-        while (smaller_than_min) {
-#if DEBUG_PRINT
-          //alex::coutLock.lock();
-          //std::cout << "t" << worker_id << " - ";
-          //std::cout << "we are smaller than min (bucket ID : " << bucketID << ")" << std::endl;
-          //alex::coutLock.unlock();
-#endif
-          bucketID = bucketID - (bucketID % cur_duplication_factor);
-          if (bucketID == 0) {break;} //leftest node. we start from here.
-          bucketID -= 1;
-          cur = cur_children[bucketID]; 
-          memory_fence();
-          cur_duplication_factor = 1 << cur->duplication_factor_;
-          memory_fence();
-          cur_node_min_key = cur->min_key_.read();
-          memory_fence();
-          cur_node_max_key = cur->max_key_.read();
-          memory_fence();
-#if DEBUG_PRINT
-            //alex::coutLock.lock();
-            //std::cout << "t" << worker_id << " - ";
-            //std::cout << "continuing search where min/max key is " 
-            //          << cur_node_min_key->key_arr_ << " " << cur_node_max_key->key_arr_ << std::endl;
-            //alex::coutLock.unlock();
-#endif
-          smaller_than_min = key_less_(key, *(cur_node_min_key));
-          larger_than_max = key_less_(*(cur_node_max_key), key);
-        }
-#if DEBUG_PRINT
-        //alex::coutLock.lock();
-        //std::cout << "t" << worker_id << " - ";
-        //std::cout << "found node whose min key is smaller than current key (bucket ID : " << bucketID << ")" << std::endl;
-        //alex::coutLock.unlock();
-#endif
-        cur->min_key_.lock();
-        memory_fence();
-        cur->max_key_.lock();
-        memory_fence();
-        cur_node_min_key = cur->min_key_.val_;
-        memory_fence();
-        cur_node_max_key = cur->max_key_.val_;
-        memory_fence();
-#if DEBUG_PRINT
-        //alex::coutLock.lock();
-        //std::cout << "t" << worker_id << " - ";
-        //std::cout << "node's min_key is " << cur_node_min_key->key_arr_
-        //          << " and max key is " << cur_node_max_key->key_arr_ << std::endl;
-        //alex::coutLock.unlock();
-#endif
-        smaller_than_min = key_less_(key, *(cur_node_min_key));
-        larger_than_max = key_less_(*(cur_node_max_key), key);
 
-        if (larger_than_max) { 
-          //from here, we won't be reading new metadata values, so we don't rcu_progress.
-          //we may read new lower level nodes or their boundaries,
-          //but theoretically it won't effect the semantic
-          while (true) {
-            //we go on finding the next node (that should have larger keys)
-            node_type *cur_next;
-            int cur_bucketID = bucketID;
-#if DEBUG_PRINT
-            //alex::coutLock.lock();
-            //std::cout << "t" << worker_id << " - ";
-            //std::cout << "we are larger than max (bucket ID : " << bucketID << ")" << std::endl;
-            //alex::coutLock.unlock();
-#endif
-            bucketID = bucketID - (bucketID % cur_duplication_factor) + cur_duplication_factor;
-
-            if (bucketID > num_children - 1) {
-              //should EXTEND the last node.
-              AlexKey<T> *new_max_key = new AlexKey<T>();
-              new_max_key->key_arr_ = new T[max_key_length_];
-              std::copy(key.key_arr_, key.key_arr_ + max_key_length_, new_max_key->key_arr_);
-              AlexKey<T> *old_max_key = cur->max_key_.val_;
-              cur->max_key_.val_ = new_max_key;
-              cur->min_key_.unlock();
-              cur->max_key_.unlock();
-              rcu_barrier(worker_id);
-              delete old_max_key;
-              bucketID = cur_bucketID;
-              break;
-            }
-
-            //If we found the new node, we try to obtain the lock of those nodes.
-            cur_next = cur_children[bucketID];
-            cur_duplication_factor = 1 << cur_next->duplication_factor_;
-#if DEBUG_PRINT
-            //alex::coutLock.lock();
-            //std::cout << "t" << worker_id << " - ";
-            //std::cout << "found new node (bucket ID : " << bucketID << ")" << std::endl;
-            //alex::coutLock.unlock();
-#endif
-            AlexKey<T> *next_node_min_key, *next_node_max_key;
-            cur_next->min_key_.lock();
-            memory_fence();
-            cur_next->max_key_.lock();
-            memory_fence();
-            next_node_min_key = cur_next->min_key_.val_;
-            memory_fence();
-            next_node_max_key = cur_next->max_key_.val_;
-            memory_fence();
-#if DEBUG_PRINT
-            //alex::coutLock.lock();
-            //std::cout << "t" << worker_id << " - ";
-            //std::cout << "node's min_key is " << next_node_min_key->key_arr_
-            //          << " and max key is " << next_node_max_key->key_arr_ << std::endl;
-            //alex::coutLock.unlock();
-#endif
-            smaller_than_min = key_less_(key, *(next_node_min_key));
-            larger_than_max = key_less_(*(next_node_max_key), key);
-              
-            if (smaller_than_min && larger_than_max) {
-              // next node was empty node
-              // we again need to search the node after this empty node.
-#if DEBUG_PRINT
-              //alex::coutLock.lock();
-              //std::cout << "t" << worker_id << " - ";
-              //std::cout << "new node was empty node (bucket ID : " << bucketID << ")" << std::endl;
-              //alex::coutLock.unlock();
-#endif
-EmptyNodeStart:
-              node_type *cur_dbl_next;
-              int cur_next_bucketID = bucketID;
-              bucketID = bucketID - (bucketID % cur_duplication_factor) + cur_duplication_factor;
-
-              if (bucketID > num_children - 1) {
-                //need to insert in empty data node...
-#if DEBUG_PRINT
-                alex::coutLock.lock();
-                std::cout << "t" << worker_id << " - ";
-                std::cout << "empty node was last node (could happen, but please verify)" << std::endl;
-                alex::coutLock.unlock();
-#endif
-
-                AlexKey<T> *new_max_key = new AlexKey<T>();
-                AlexKey<T> *new_min_key = new AlexKey<T>();
-                new_max_key->key_arr_ = new T[max_key_length_];
-                new_min_key->key_arr_ = new T[max_key_length_];
-                std::copy(key.key_arr_, key.key_arr_ + max_key_length_, new_max_key->key_arr_);
-                std::copy(key.key_arr_, key.key_arr_ + max_key_length_, new_min_key->key_arr_);
-                AlexKey<T> *old_max_key = cur_next->max_key_.val_;
-                AlexKey<T> *old_min_key = cur_next->min_key_.val_;
-                cur_next->min_key_.val_ = new_min_key;
-                cur_next->max_key_.val_ = new_max_key;
-                cur->min_key_.unlock();
-                cur->max_key_.unlock();
-                cur_next->min_key_.unlock();
-                cur_next->max_key_.unlock();
-                rcu_barrier(worker_id);
-                delete old_max_key;
-                delete old_min_key;
-                cur = cur_next;
-                bucketID = cur_next_bucketID;
-                break;
-              }
-
-              //If we found the new node, and if we're not in special case,
-              //we try to obtain the lock of those nodes.
-              cur_dbl_next = cur_children[bucketID];
-              cur_duplication_factor = 1 << cur_dbl_next->duplication_factor_;
-#if DEBUG_PRINT
-              //alex::coutLock.lock();
-              //std::cout << "t" << worker_id << " - ";
-              //std::cout << "we found another node (next next node) (bucket ID : " << bucketID << ")" << std::endl;
-              //alex::coutLock.unlock();
-#endif
-              AlexKey<T> *dbl_next_node_min_key, *dbl_next_node_max_key;
-              cur_dbl_next->min_key_.lock();
-              memory_fence();
-              cur_dbl_next->max_key_.lock();
-              memory_fence();
-              dbl_next_node_min_key = cur_dbl_next->min_key_.val_;
-              memory_fence();
-              dbl_next_node_max_key = cur_dbl_next->max_key_.val_;
-              memory_fence();
-#if DEBUG_PRINT
-              //alex::coutLock.lock();
-              //std::cout << "t" << worker_id << " - ";
-              //std::cout << "node's min_key is " << dbl_next_node_min_key->key_arr_
-              //          << " and max key is " << dbl_next_node_max_key->key_arr_ << std::endl;
-              //alex::coutLock.unlock();
-#endif
-              smaller_than_min = key_less_(key, *(dbl_next_node_min_key));
-              larger_than_max = key_less_(*(dbl_next_node_max_key), key);
-
-              if (smaller_than_min && larger_than_max) {
-                //it's another empty data node
-                //decided to have that new empty data node as cur_next.
-                //there is no special reason of choosing that node as cur_next
-                //but searching must continue becuase of possible wrong boundary.
-#if DEBUG_PRINT
-                //alex::coutLock.lock();
-                //std::cout << "t" << worker_id << " - ";
-                //std::cout << "another empty data node found. " << std::endl;
-                //alex::coutLock.unlock();
-#endif
-                cur_next->min_key_.unlock();
-                cur_next->max_key_.unlock();
-                cur_next = cur_dbl_next;
-                goto EmptyNodeStart;
-              }
-              else if (smaller_than_min) {
-                //try inserting to empty data node. which means, we enter the empty data node!
-#if DEBUG_PRINT
-                alex::coutLock.lock();
-                std::cout << "t" << worker_id << " - ";
-                std::cout << "decided to insert to empty data node (it's bucket ID : " << cur_next_bucketID << ")" << std::endl;
-                alex::coutLock.unlock();
-#endif
-                AlexKey<T> *new_max_key = new AlexKey<T>();
-                AlexKey<T> *new_min_key = new AlexKey<T>();
-                new_max_key->key_arr_ = new T[max_key_length_];
-                new_min_key->key_arr_ = new T[max_key_length_];
-                std::copy(key.key_arr_, key.key_arr_ + max_key_length_, new_max_key->key_arr_);
-                std::copy(key.key_arr_, key.key_arr_ + max_key_length_, new_min_key->key_arr_);
-                AlexKey<T> *old_max_key = cur_next->max_key_.val_;
-                AlexKey<T> *old_min_key = cur_next->min_key_.val_;
-                cur_next->min_key_.val_ = new_min_key;
-                cur_next->max_key_.val_ = new_max_key;
-                cur->min_key_.unlock();
-                cur->max_key_.unlock();
-                cur_next->min_key_.unlock();
-                cur_next->max_key_.unlock();
-                cur_dbl_next->min_key_.unlock();
-                cur_dbl_next->max_key_.unlock();
-                rcu_barrier(worker_id);
-                delete old_max_key;
-                delete old_min_key;
-                cur = cur_next;
-                bucketID = cur_next_bucketID;
-                break;
-              }
-              if (larger_than_max) {
-                //we are even larger than largest key of next node.
-                //do the same progress as before, except that cur_dbl_next node is cur node.
-#if DEBUG_PRINT
-                //alex::coutLock.lock();
-                //std::cout << "t" << worker_id << " - ";
-                //std::cout << "we are larger than next next node (bucket ID : " << bucketID << ")" << std::endl;
-                //alex::coutLock.unlock();
-#endif
-                cur->min_key_.unlock();
-                cur->max_key_.unlock();
-                cur_next->min_key_.unlock();
-                cur_next->max_key_.unlock();
-                cur_dbl_next->min_key_.unlock();
-                cur_dbl_next->max_key_.unlock();
-                cur = cur_dbl_next;
-              }
-              else {
-                //the boundary may have changed to just include our key while moving
-                //so choose 'cur_dbl_next' node as our moving node
-#if DEBUG_PRINT
-                alex::coutLock.lock();
-                std::cout << "t" << worker_id << " - ";
-                std::cout << "decided to enter next next node (bucket ID : " << bucketID << ")\n";
-                std::cout << "this node has min_key_ as " << cur_dbl_next->min_key_.val_->key_arr_ 
-                          << " and max_key_ as " << cur_dbl_next->max_key_.val_->key_arr_ << std::endl;
-                alex::coutLock.unlock();
-#endif
-                cur->min_key_.unlock();
-                cur->max_key_.unlock();
-                cur_next->min_key_.unlock();
-                cur_next->max_key_.unlock();
-                cur_dbl_next->min_key_.unlock();
-                cur_dbl_next->max_key_.unlock();
-                cur = cur_dbl_next;
-                break;
-              }
-            }
-            else if (smaller_than_min) {
-              //Doesn't matter to enter 'cur' model node. we also extend it.
-              //should do rcu barrier, since some other node may be using that boundary.
-#if DEBUG_PRINT
-              alex::coutLock.lock();
-              std::cout << "t" << worker_id << " - ";
-              std::cout << "decided to extend current node and enter (it's bucket ID : " << cur_bucketID << ")\n";
-              std::cout << "It'll have min_key_ as " << cur->min_key_.val_->key_arr_ 
-                        << " and max_key_ as " << key.key_arr_ << std::endl;
-              alex::coutLock.unlock();
-#endif
-              AlexKey<T> *new_max_key = new AlexKey<T>();
-              new_max_key->key_arr_ = new T[max_key_length_];
-              std::copy(key.key_arr_, key.key_arr_ + max_key_length_, new_max_key->key_arr_);
-              AlexKey<T> *old_max_key = cur->max_key_.val_;
-              cur->max_key_.val_ = new_max_key;
-              cur->min_key_.unlock();
-              cur->max_key_.unlock();
-              cur_next->min_key_.unlock();
-              cur_next->max_key_.unlock();
-              rcu_barrier(worker_id);
-              delete old_max_key;
-              bucketID = cur_bucketID;
-#if DEBUG_PRINT
-              //alex::coutLock.lock();
-              //std::cout << "t" << worker_id << " - ";
-              //std::cout << "update finished" << std::endl;
-              //alex::coutLock.unlock();
-#endif
-              break;
-            }
-            else if (larger_than_max) {
-              //we are even larger than largest key of next node.
-              //do the same progress as before, except that cur_next node is cur node.
-#if DEBUG_PRINT
-              //alex::coutLock.lock();
-              //std::cout << "t" << worker_id << " - ";
-              //std::cout << "we are larger than next node (bucket ID : " << bucketID << ")" << std::endl;
-              //alex::coutLock.unlock();
-#endif
-              cur->min_key_.unlock();
-              cur->max_key_.unlock();
-              cur = cur_next;
-            }
-            else {
-              //the boundary may have changed to just include our key while moving
-              //so choose 'cur_next' node as our moving node
-#if DEBUG_PRINT
-              alex::coutLock.lock();
-              std::cout << "t" << worker_id << " - ";
-              std::cout << "decided to enter next node (it's bucket ID : " << bucketID << ")\n";
-              std::cout << "this node has min_key_ as " << cur_next->min_key_.val_->key_arr_ 
-                        << " and max_key_ as " << cur_next->max_key_.val_->key_arr_ << std::endl;
-              alex::coutLock.unlock();
-#endif
-              cur->min_key_.unlock();
-              cur->max_key_.unlock();
-              cur_next->min_key_.unlock();
-              cur_next->max_key_.unlock();
-              cur = cur_next;
-              break;
-            }
-          }
-        }
-        else { //this is the next node we'll enter.
-#if DEBUG_PRINT
-          alex::coutLock.lock();
-          std::cout << "t" << worker_id << " - ";
-          std::cout << "decided to enter current node (it's bucket ID : " << bucketID << ")\n";
-          std::cout << "this node has min_key_ as " << cur->min_key_.val_->key_arr_ 
-                    << " and max_key_ as " << cur->max_key_.val_->key_arr_ << std::endl;
-          alex::coutLock.unlock();
-#endif
-          cur->min_key_.unlock();
-          cur->max_key_.unlock();
+      bool larger_than_pivot = key_less_(*(cur_pivot_key), key);
+      if (larger_than_pivot) {
+        while (true) {
+          int next_bucketID = bucketID + cur_duplication_factor;
+          if (next_bucketID >= num_children) {break;}
+          auto cur_next = cur_children[next_bucketID];
+          int cur_next_duplication_factor = 1 << cur_next->duplication_factor_;
+          AlexKey<T> *cur_next_pivot_key = &(cur_next->pivot_key_);
+          if (key_less_(key, *(cur_next_pivot_key))) {break;}
+          bucketID = next_bucketID;
+          cur = cur_next;
+          cur_duplication_factor = cur_next_duplication_factor;
         }
       }
 
@@ -1218,8 +789,7 @@ EmptyNodeStart:
 #endif
     std::copy(min_key_arr, min_key_arr + max_key_length_, istats_.key_domain_min_);
     std::copy(max_key_arr, max_key_arr + max_key_length_, istats_.key_domain_max_);
-    std::copy(min_key_arr, min_key_arr + max_key_length_, superroot_->min_key_.val_->key_arr_);
-    std::copy(max_key_arr, max_key_arr + max_key_length_, superroot_->max_key_.val_->key_arr_);
+    std::copy(min_key_arr, min_key_arr + max_key_length_, superroot_->pivot_key_.key_arr_);
 
     AlexKey<T> mintmpkey(istats_.key_domain_min_);
     AlexKey<T> maxtmpkey(istats_.key_domain_max_);
@@ -1486,20 +1056,16 @@ EmptyNodeStart:
         cur += repeats;
       }
 
-      /* update min_key_, max_key_ for new model node*/
+      /* update pivot_key_ for new model node*/
       std::copy(values[0].first.key_arr_, values[0].first.key_arr_ + max_key_length_,
-        model_node->min_key_.val_->key_arr_);
-      std::copy(values[num_keys-1].first.key_arr_, values[num_keys-1].first.key_arr_ + max_key_length_,
-        model_node->max_key_.val_->key_arr_);
+        model_node->pivot_key_.key_arr_);
       
       
 #if DEBUG_PRINT
-      std::cout << "min_key_(model_node) : " << model_node->min_key_.val_->key_arr_ << '\n';
-      std::cout << "max_key_(model_node) : " << model_node->max_key_.val_->key_arr_ << '\n';
+      std::cout << "pivot_key_(model_node) : " << model_node->pivot_key_.key_arr_ << '\n';
       for (int i = 0; i < fanout; i++) {
         std::cout << i << "'s initial pointer value is : " << model_node->children_[i] << '\n';
-        std::cout << i << "'s min_key is : " << model_node->children_[i]->min_key_.val_->key_arr_ << '\n';
-        std::cout << i << "'s max_key is : " << model_node->children_[i]->max_key_.val_->key_arr_ << '\n';
+        std::cout << i << "'s pivot_key_ is : " << model_node->children_[i]->pivot_key_.key_arr_ << '\n';
       }
       std::cout << std::flush;
 #endif
@@ -2187,11 +1753,9 @@ public:
     new_node->duplication_factor_ = leaf->duplication_factor_;
     new_node->num_children_ = fanout;
     new_node->children_ = new node_type*[fanout];
-    //needs to initialize min/max key in case of split_downwards.
-    std::copy(leaf->min_key_.val_->key_arr_, leaf->min_key_.val_->key_arr_ + max_key_length_,
-              new_node->min_key_.val_->key_arr_);
-    std::copy(leaf->max_key_.val_->key_arr_, leaf->max_key_.val_->key_arr_ + max_key_length_,
-              new_node->max_key_.val_->key_arr_);
+    //needs to initialize pivot key in case of split_downwards.
+    std::copy(leaf->pivot_key_.key_arr_, leaf->pivot_key_.key_arr_ + max_key_length_,
+              new_node->pivot_key_.key_arr_);
 
 
     int repeats = 1 << leaf->duplication_factor_;
@@ -2234,13 +1798,10 @@ public:
       std::cout << i << " : " << parent->children_[i] << '\n';
     }
     std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
-    std::cout << "min_key_(model_node) : " << new_node->min_key_.val_->key_arr_ << '\n';
-    std::cout << "max_key_(model_node) : " << new_node->max_key_.val_->key_arr_ << '\n';
+    std::cout << "pivot_key_(model_node) : " << new_node->pivot_key_.key_arr_ << '\n';
     for (int i = 0; i < fanout; i++) {
-        std::cout << i << "'s min_key is : "
-                  << new_node->children_[i]->min_key_.val_->key_arr_ << '\n';
-        std::cout << i << "'s max_key is : " 
-                  << new_node->children_[i]->max_key_.val_->key_arr_ << '\n';
+        std::cout << i << "'s pivot_key_ is : "
+                  << new_node->children_[i]->pivot_key_.key_arr_ << '\n';
     }
     std::cout << std::flush;
     alex::coutLock.unlock();
@@ -2342,24 +1903,18 @@ public:
     int end_bucketID = start_bucketID + num_buckets;
     int mid_bucketID = start_bucketID + num_buckets / 2;
 
-    bool append_mostly_right = old_node->is_append_mostly_right();
-    int appending_right_bucketID = std::min<int>(
-        std::max<int>(parent->model_.predict(*(old_node->max_key_.val_)), 0),
-        parent->num_children_ - 1);
-    bool append_mostly_left = old_node->is_append_mostly_left();
-    int appending_left_bucketID = std::min<int>(
-        std::max<int>(parent->model_.predict(*(old_node->min_key_.val_)), 0),
-        parent->num_children_ - 1);
-
     int right_boundary = 0;
     AlexKey<T> tmpkey;
     tmpkey.key_arr_ = new T[max_key_length_];
     //According to my insight, linear model would be monotonically increasing
     //So I think we could compute key corresponding to mid_bucketID as
     //average of min/max key of current splitting node.
+    pthread_rwlock_rdlock(&(parent->children_rw_lock_));
     for (unsigned int i = 0; i < max_key_length_; i++) {
-      tmpkey.key_arr_[i] = (old_node->max_key_.val_->key_arr_[i] + old_node->min_key_.val_->key_arr_[i]) / 2;
+      tmpkey.key_arr_[i] = (parent->children_[i]->pivot_key_.key_arr_[i]
+                        +  old_node->pivot_key_.key_arr_[i]) / 2;
     }
+    pthread_rwlock_unlock(&(parent->children_rw_lock_));
     
     right_boundary = old_node->lower_bound(tmpkey);
     // Account for off-by-one errors due to floating-point precision issues.
@@ -2372,17 +1927,9 @@ public:
           old_node->data_capacity_);
     }
     data_node_type* left_leaf = bulk_load_leaf_node_from_existing(
-        old_node, 0, right_boundary, worker_id, this_ptr, true, nullptr, reuse_model,
-        append_mostly_right && start_bucketID <= appending_right_bucketID &&
-            appending_right_bucketID < mid_bucketID,
-        append_mostly_left && start_bucketID <= appending_left_bucketID &&
-            appending_left_bucketID < mid_bucketID);
+        old_node, 0, right_boundary, worker_id, this_ptr, true, nullptr, reuse_model);
     data_node_type* right_leaf = bulk_load_leaf_node_from_existing(
-        old_node, right_boundary, old_node->data_capacity_, worker_id, this_ptr, true, nullptr, reuse_model,
-        append_mostly_right && mid_bucketID <= appending_right_bucketID &&
-            appending_right_bucketID < end_bucketID,
-        append_mostly_left && mid_bucketID <= appending_left_bucketID &&
-            appending_left_bucketID < end_bucketID);
+        old_node, right_boundary, old_node->data_capacity_, worker_id, this_ptr, true, nullptr, reuse_model);
     old_node->pending_left_leaf_.update(left_leaf);
     old_node->pending_right_leaf_.update(right_leaf);
     left_leaf->level_ = static_cast<short>(parent->level_ + 1);
@@ -2404,12 +1951,10 @@ public:
 #if DEBUG_PRINT
       alex::coutLock.lock();
       std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
-      std::cout << "two new data node made with left min/max as "
-                << left_leaf->min_key_.val_->key_arr_
-                << " " << left_leaf->max_key_.val_->key_arr_
-                << "and right min/max as "
-                << right_leaf->min_key_.val_->key_arr_
-                << " " << right_leaf->max_key_.val_->key_arr_
+      std::cout << "two new data node made with left pivot as "
+                << left_leaf->pivot_key_.key_arr_
+                << " and right min/max as "
+                << right_leaf->pivot_key_.key_arr_
                 << std::endl;
       alex::coutLock.unlock();
 #endif
@@ -2441,15 +1986,6 @@ public:
     //std::cout << "old node is " << old_node << std::endl;
     //alex::coutLock.unlock();
 #endif
-    bool append_mostly_right = old_node->is_append_mostly_right();
-    int appending_right_bucketID = std::min<int>(
-        std::max<int>(parent->model_.predict(*(old_node->max_key_.val_)), 0),
-        parent->num_children_ - 1);
-    bool append_mostly_left = old_node->is_append_mostly_left();
-    int appending_left_bucketID = std::min<int>(
-        std::max<int>(parent->model_.predict(*(old_node->min_key_.val_)), 0),
-        parent->num_children_ - 1);
-
     // Create the new data nodes
     int cur = start_bucketID;  // first bucket with same child
     std::vector<std::pair<node_type *, int>> generated_nodes;
@@ -2478,10 +2014,6 @@ public:
       auto duplication_factor = static_cast<uint8_t>(
           fanout_tree_depth - tree_node.level + extra_duplication_factor);
       int child_node_repeats = 1 << duplication_factor;
-      bool keep_left = append_mostly_right && cur <= appending_right_bucketID &&
-                       appending_right_bucketID < cur + child_node_repeats;
-      bool keep_right = append_mostly_left && cur <= appending_left_bucketID &&
-                        appending_left_bucketID < cur + child_node_repeats;
       right_boundary = tree_node.right_boundary;
       // Account for off-by-one errors due to floating-point precision issues.
       tree_node.num_keys -= num_reassigned_keys;
@@ -2498,8 +2030,7 @@ public:
       }
       tree_node.num_keys += num_reassigned_keys;
       data_node_type* child_node = bulk_load_leaf_node_from_existing(
-          old_node, left_boundary, right_boundary, worker_id, this_ptr, false, &tree_node, false,
-          keep_left, keep_right);
+          old_node, left_boundary, right_boundary, worker_id, this_ptr, false, &tree_node);
 #if DEBUG_PRINT
       alex::coutLock.lock();
       std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
@@ -2560,10 +2091,8 @@ public:
 #if DEBUG_PRINT
       alex::coutLock.lock();
       std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
-      std::cout << "new data node made with min_key as "
-                << child_node->min_key_.val_->key_arr_
-                << " and max_key as "
-                << child_node->max_key_.val_->key_arr_
+      std::cout << "new data node made with pivot_key_ as : "
+                << child_node->pivot_key_.key_arr_
                 << std::endl;
       alex::coutLock.unlock();
 #endif

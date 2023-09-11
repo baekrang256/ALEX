@@ -67,42 +67,25 @@ class AlexNode {
   //parent of current node. Root is nullptr. Need to be given by parameter.
   model_node_type *parent_ = nullptr;
 
-  // Variables for determining append-mostly behavior and checking errors.
-  // max key in node, updates after inserts but not erases.
-  AtomicVal<AlexKey<T> *>max_key_; 
-  // min key in node, updates after inserts but not erases. 
-  AtomicVal<AlexKey<T> *>min_key_;
+  // pivot key of node. Never updates
+  AlexKey<T> pivot_key_;
 
   AlexNode() = default;
   explicit AlexNode(short level) : level_(level) {
-    max_key_.val_ = new AlexKey<T>();
-    min_key_.val_ = new AlexKey<T>();
-    max_key_.val_->key_arr_ = new T[max_key_length_];
-    min_key_.val_->key_arr_ = new T[max_key_length_];
-    max_key_.val_->key_arr_[0] = STR_VAL_MIN;
-    std::fill(max_key_.val_->key_arr_ + 1, max_key_.val_->key_arr_ + max_key_length_, 0);
-    std::fill(min_key_.val_->key_arr_, min_key_.val_->key_arr_ + max_key_length_,
+    pivot_key_.key_arr_ = new T[max_key_length_];
+    std::fill(pivot_key_.key_arr_, pivot_key_.key_arr_ + max_key_length_,
         STR_VAL_MAX);
   }
   AlexNode(short level, bool is_leaf) : is_leaf_(is_leaf), level_(level) {
-    max_key_.val_ = new AlexKey<T>();
-    min_key_.val_ = new AlexKey<T>();
-    max_key_.val_->key_arr_ = new T[max_key_length_];
-    min_key_.val_->key_arr_ = new T[max_key_length_];
-    max_key_.val_->key_arr_[0] = STR_VAL_MIN;
-    std::fill(max_key_.val_->key_arr_ + 1, max_key_.val_->key_arr_ + max_key_length_, 0);
-    std::fill(min_key_.val_->key_arr_, min_key_.val_->key_arr_ + max_key_length_,
+    pivot_key_.key_arr_ = new T[max_key_length_];
+    std::fill(pivot_key_.key_arr_, pivot_key_.key_arr_ + max_key_length_,
         STR_VAL_MAX);
   }
   AlexNode(short level, bool is_leaf, model_node_type *parent)
       : is_leaf_(is_leaf), level_(level), parent_(parent) {
-    max_key_.val_ = new AlexKey<T>();
-    min_key_.val_ = new AlexKey<T>();
-    max_key_.val_->key_arr_ = new T[max_key_length_];
-    min_key_.val_->key_arr_ = new T[max_key_length_];
-    max_key_.val_->key_arr_[0] = STR_VAL_MIN;
-    std::fill(max_key_.val_->key_arr_ + 1, max_key_.val_->key_arr_ + max_key_length_, 0);
-    std::fill(min_key_.val_->key_arr_, min_key_.val_->key_arr_ + max_key_length_, STR_VAL_MAX);
+    pivot_key_.key_arr_ = new T[max_key_length_];
+    std::fill(pivot_key_.key_arr_, pivot_key_.key_arr_ + max_key_length_,
+        STR_VAL_MAX);
   }
 
   AlexNode(self_type& other)
@@ -112,8 +95,7 @@ class AlexNode {
         model_(other.model_),
         cost_(other.cost_),
         parent_(other.parent_) {
-    max_key_.val_ = new AlexKey<T>(other.max_key_.val_->key_arr_);
-    min_key_.val_ = new AlexKey<T>(other.min_key_.val_->key_arr_);
+    pivot_key_ = other.pivot_key_;
   }
   virtual ~AlexNode() = default;
 
@@ -154,8 +136,6 @@ class AlexModelNode : public AlexNode<T, P, Alloc> {
 
   ~AlexModelNode() {
     delete children_;
-    delete this->max_key_.val_;
-    delete this->min_key_.val_;
     pthread_rwlock_destroy(&children_rw_lock_);
   }
 
@@ -378,8 +358,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       bitmap_allocator().deallocate(bitmap_, bitmap_size_);
     }
 #endif
-    delete this->min_key_.val_;
-    delete this->max_key_.val_;
     delete[] the_max_key_arr_;
     delete[] the_min_key_arr_;
     pthread_rwlock_destroy(&key_array_rw_lock);
@@ -1250,16 +1228,13 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     contraction_threshold_ = data_capacity_ * kMinDensity_;
 
     std::copy(values[0].first.key_arr_, values[0].first.key_arr_ + max_key_length_,
-      this->min_key_.val_->key_arr_);
-    std::copy(values[num_keys-1].first.key_arr_, values[num_keys-1].first.key_arr_ + max_key_length_,
-      this->max_key_.val_->key_arr_);
+      this->pivot_key_.key_arr_);
     
 #if DEBUG_PRINT
       //std::cout << values[0].first.key_arr_ << '\n';
       //std::cout << values[num_keys-1].first.key_arr_ << '\n';
       //std::cout << "with max length as " << max_key_length_ << '\n';
-      //std::cout << "min_key_(data_node) : " << this->min_key_.val_->key_arr_ << '\n';
-      //std::cout << "max_key_(data_node) : " << this->max_key_.val_->key_arr_ << std::endl;
+      //std::cout << "pivot_key_(data_node) : " << this->pivot_key_.key_arr_ << '\n';
 #endif
   }
 
@@ -1332,7 +1307,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     int keys_remaining = num_keys_;
     const_iterator_type it(node, left);
     for (unsigned int i = 0; i < max_key_length_; i++) {
-      this->min_key_.val_->key_arr_[i] = it.key().key_arr_[i];
+      this->pivot_key_.key_arr_[i] = it.key().key_arr_[i];
     }
     for (; it.cur_idx_ < right && !it.is_end(); it++) {
       int position = this->model_.predict(it.key());
@@ -1377,10 +1352,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 
     for (int i = last_position + 1; i < data_capacity_; i++) {
       ALEX_DATA_NODE_KEY_AT(i) = kEndSentinel_;
-    }
-
-    for (unsigned int i = 0; i < max_key_length_; i++) {
-      this->max_key_.val_->key_arr_[i] = ALEX_DATA_NODE_KEY_AT(last_position).key_arr_[i];
     }
 
     expansion_threshold_ =

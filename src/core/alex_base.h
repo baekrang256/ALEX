@@ -67,7 +67,7 @@ typedef unsigned __int32 uint32_t;
 #define DEBUG_PRINT 0
 
 /*** profile ***/
-#define PROFILE 1
+#define PROFILE 0
 
 /*** some utils for multithreading ***/
 #define likely(x) __builtin_expect(!!(x), 1)
