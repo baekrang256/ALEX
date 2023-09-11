@@ -426,7 +426,7 @@ void *run_fg(void *param) {
 
 #if DEBUG_PRINT
   alex::coutLock.lock();
-  std::cout << "worker id : " << thread_id << " now retrying pending inserts " << std::endl;
+  std::cout << "worker id : " << thread_id << " now retrying pending ops " << std::endl;
   alex::coutLock.unlock();
 #endif
 

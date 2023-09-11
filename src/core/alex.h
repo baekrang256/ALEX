@@ -468,15 +468,19 @@ class Alex {
         alex::coutLock.lock();
         std::cout << "t" << worker_id << " - ";
         std::cout << "initial bucket : " << bucketID << std::endl;
-        //std::cout << "min_key : " << cur->min_key_.read() << std::endl;
-        //std::cout << "max_key : " << cur->max_key_.read() << std::endl;
         alex::coutLock.unlock();
 #endif
-
       AlexKey<T> *cur_node_min_key = cur->min_key_.read();
       memory_fence();
       AlexKey<T> *cur_node_max_key = cur->max_key_.read();
       memory_fence();
+#if DEBUG_PRINT
+      alex::coutLock.lock();
+      std::cout << "t" << worker_id << " - ";
+      std::cout << "minkey : " << cur_node_min_key->key_arr_ << '\n';
+      std::cout << "maxkey : " << cur_node_max_key->key_arr_ << std::endl;
+      alex::coutLock.unlock();
+#endif
       int was_walking_in_empty = 0;
       int smaller_than_min = key_less_(key, *(cur_node_min_key));
       int larger_than_max = key_less_(*(cur_node_max_key), key);
