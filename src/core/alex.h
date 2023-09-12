@@ -105,7 +105,7 @@ class Alex {
   DerivedParams derived_params_;
 
   /* Counters, useful for benchmarking and profiling */
-  AtomicVal<int> num_keys = AtomicVal<int>(0);
+  std::atomic<int> num_keys;
 
  private:
   /* Structs used internally */
@@ -164,6 +164,7 @@ class Alex {
   * 4) allocation function used for allocation. Default is basic allocator. */
   Alex() {
     // key_domain setup
+    std::atomic_init(&num_keys, 0);
     istats_.key_domain_min_ = new T[max_key_length_];
     istats_.key_domain_max_ = new T[max_key_length_];
     istats_.key_domain_max_[0] = STR_VAL_MIN;
@@ -181,6 +182,7 @@ class Alex {
 
   Alex(const Compare& comp, const Alloc& alloc = Alloc())
       : key_less_(comp), allocator_(alloc) {
+    std::atomic_init(&num_keys, 0);
     // key_domain setup
     istats_.key_domain_min_ = new T[max_key_length_];
     istats_.key_domain_max_ = new T[max_key_length_];
@@ -198,6 +200,7 @@ class Alex {
   }
 
   Alex(const Alloc& alloc) : allocator_(alloc) {
+    std::atomic_init(&num_keys, 0);
     // key_domain setup
     istats_.key_domain_min_ = new T[max_key_length_];
     istats_.key_domain_max_ = new T[max_key_length_];
@@ -235,6 +238,7 @@ class Alex {
   explicit Alex(InputIterator first, InputIterator last,
                 const Compare& comp = Compare(), const Alloc& alloc = Alloc())
       : key_less_(comp), allocator_(alloc) {
+    std::atomic_init(&num_keys, 0);
     // key_domain setup
     istats_.key_domain_min_ = new T[max_key_length_];
     std::fill(istats_.key_domain_min_, istats_.key_domain_min_ + max_key_length_,
@@ -256,6 +260,7 @@ class Alex {
   explicit Alex(InputIterator first, InputIterator last,
                 const Alloc& alloc = Alloc())
       : allocator_(alloc) {
+    std::atomic_init(&num_keys, 0);
     // key_domain setup
     istats_.key_domain_min_ = new T[max_key_length_];
     std::fill(istats_.key_domain_min_, istats_.key_domain_min_ + max_key_length_,
@@ -290,7 +295,7 @@ class Alex {
     superroot_ =
         static_cast<model_node_type*>(copy_tree_recursive(other.superroot_));
     root_node_ = superroot_->children_[0];
-    num_keys.val_ = other.num_keys.val_;
+    num_keys = other.num_keys;
   }
 
   Alex& operator=(const self_type& other) {
@@ -305,7 +310,7 @@ class Alex {
       params_ = other.params_;
       derived_params_ = other.derived_params_;
       istats_ = other.istats_;
-      num_keys.val_ = other.num_keys.val_;
+      num_keys = other.num_keys;
       key_less_ = other.key_less_;
       allocator_ = other.allocator_;
       istats_.key_domain_min_ = new T[max_key_length_];
@@ -327,9 +332,9 @@ class Alex {
     std::swap(key_less_, other.key_less_);
     std::swap(allocator_, other.allocator_);
     
-    auto arb_num_keys = num_keys.val_;
-    num_keys.val_ = other.num_keys.val_;
-    other.num_keys.val_ = num_keys.val_;
+    auto arb_num_keys = num_keys;
+    num_keys = other.num_keys;
+    other.num_keys = num_keys;
 
     std::swap(istats_.key_domain_min_, other.istats_.key_domain_min_);
     std::swap(istats_.key_domain_max_, other.istats_.key_domain_max_);
@@ -686,12 +691,12 @@ class Alex {
   // The number of elements should be num_keys.
   // The index must be empty when calling this method.
   void bulk_load(const V values[], int num_keys) {
-    if (this->num_keys.val_ > 0 || num_keys <= 0) {
+    if (this->num_keys > 0 || num_keys <= 0) {
       return;
     }
     delete_node(root_node_);  // delete the empty root node from constructor
 
-    this->num_keys.val_ = num_keys;
+    this->num_keys = num_keys;
 
     // Build temporary root model, which outputs a CDF in the range [0, 1]
     root_node_ =
@@ -1496,7 +1501,7 @@ public:
 #endif
       pthread_mutex_unlock(&leaf->insert_mutex);
       memory_fence();
-      num_keys.increment();
+      num_keys++;
       rcu_progress(worker_id);
 #if PROFILE
       auto insert_from_parent_end_time = std::chrono::high_resolution_clock::now();
@@ -1653,7 +1658,7 @@ public:
     int fanout_tree_depth = 1;
     double *model_param = nullptr;
     auto ret = fanout_tree::find_best_fanout_existing_node<T, P>(
-          leaf, this_ptr->num_keys.read(), used_fanout_tree_nodes, 2, worker_id);
+          leaf, this_ptr->num_keys.load(), used_fanout_tree_nodes, 2, worker_id);
     fanout_tree_depth = ret.first;
     model_param = ret.second;
               
@@ -2156,7 +2161,7 @@ public:
 
  public:
   // Number of elements
-  size_t size() { return static_cast<size_t>(num_keys.read()); }
+  size_t size() { return static_cast<size_t>(num_keys); }
 
   // True if there are no elements
   bool empty() const { return (size() == 0); }
