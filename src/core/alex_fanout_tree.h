@@ -393,7 +393,7 @@ std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node
   LinearModel<T> tmp_model;
   LinearModelBuilder<T> tmp_model_builder(&tmp_model);
   iterator it(node, 0);
-      
+  int *key_idx = new int[num_keys];
   size_t key_cnt = 0;
 #if DEBUG_PRINT
   alex::coutLock.lock();
@@ -403,6 +403,7 @@ std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node
 #endif
   while (it.cur_idx_ != -1) {
     tmp_model_builder.add(it.key(), ((double) key_cnt / (node->num_keys_ - 1)));
+    key_idx[key_cnt] = it.cur_idx_; 
     key_cnt++;
     it++;
 #if DEBUG_PRINT
@@ -453,52 +454,57 @@ std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node
     alex::coutLock.unlock();
 #endif
 
-    int left_boundary = 0;
-    int right_boundary = 0;
-    int iterated_keys = 0;
+    int left_boundary_key_pos = 0;
+    int right_boundary_key_pos = 0;
 #if PROFILE
       auto fanout_batch_stat_start_time = std::chrono::high_resolution_clock::now();
       profileStats.fanout_batch_stat_cnt++;
 #endif
     for (int i = 0; i < fanout; i++) {
-      left_boundary = right_boundary;
-      it = typename AlexDataNode<T, P>::const_iterator_type(node, left_boundary);
-      if (i == fanout - 1) {right_boundary = node->data_capacity_;}
+      left_boundary_key_pos = right_boundary_key_pos;
+      if (i == fanout - 1) {right_boundary_key_pos = num_keys;}
       else {
-        /* string key */
-        /* we iterate through the key array to find the smallest key resulting to i + 1*/
-        char flag = 1;
-        for (; !it.is_end(); it++) {
-          if (tmp_model.predict(it.key()) >= i+1) {
-            flag = 0;
-            right_boundary = it.cur_idx_;
-            break;
+        //binary searching for boundary
+        int left_idx = left_boundary_key_pos;
+        int right_idx = num_keys;
+        int mid = left_idx + (right_idx - left_idx) / 2;
+
+        while (left_idx < right_idx) {
+          int predicted_pos = tmp_model.predict(node->key_slots_[key_idx[mid]]);
+          if (predicted_pos <= i) {
+            left_idx = mid + 1;
+          } else {
+            right_idx = mid;
           }
-          iterated_keys++;
+          mid = left_idx + (right_idx - left_idx) / 2;
         }
-        if (flag) {right_boundary = node->data_capacity_;}
+        right_boundary_key_pos = left_idx;
       }
 
-      if (left_boundary == right_boundary) {
-        it++;
-        right_boundary = it.cur_idx_;
-        iterated_keys++;
+      if (left_boundary_key_pos == right_boundary_key_pos) {
+        right_boundary_key_pos++;
       }
-      if (num_keys - iterated_keys < fanout - i - 1) {
+      if (num_keys - right_boundary_key_pos < fanout - i - 1) {
         //not enough keys... put 1 keys each for remaining data node
-        right_boundary = num_keys - (fanout - i - 1);
+        right_boundary_key_pos = num_keys - (fanout - i - 1);
+        int left_boundary = key_idx[left_boundary_key_pos];
+        int right_boundary = right_boundary_key_pos == num_keys ? node->data_capacity_ : key_idx[right_boundary_key_pos];
         push_node_from_existing(node, left_boundary, right_boundary, num_keys,
                                 cost, i, new_level, fanout_tree_level, worker_id);
         for (int j = i + 1; j < fanout; j++) {
-          left_boundary = right_boundary;
-          right_boundary++;
+          left_boundary_key_pos = right_boundary_key_pos;
+          right_boundary_key_pos++;
+          left_boundary = key_idx[left_boundary_key_pos];
+          right_boundary = right_boundary_key_pos == num_keys ? node->data_capacity_ : key_idx[right_boundary_key_pos];
           push_node_from_existing(node, left_boundary, right_boundary, num_keys,
-                                cost, j, new_level, fanout_tree_level, worker_id);
+                                  cost, j, new_level, fanout_tree_level, worker_id);
         }
         break;
       }
       else {
         //normal case
+        int left_boundary = key_idx[left_boundary_key_pos];
+        int right_boundary = right_boundary_key_pos == num_keys ? node->data_capacity_ : key_idx[right_boundary_key_pos];
         push_node_from_existing(node, left_boundary, right_boundary, num_keys,
                                 cost, i, new_level, fanout_tree_level, worker_id);
       }
@@ -575,6 +581,8 @@ std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node
   profileStats.min_find_best_fanout_existing_node_time =
     std::min(profileStats.min_find_best_fanout_existing_node_time.load(), elapsed_time);
 #endif
+
+  delete[] key_idx;
     
   return {best_level, best_param};
 }
