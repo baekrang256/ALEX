@@ -763,6 +763,7 @@ class Alex {
         model_node_type(static_cast<short>(root_node_->level_ - 1), nullptr, allocator_);
     superroot_->num_children_ = 1;
     superroot_->children_ = new node_type*[1];
+    superroot_->model_.a_ = new double[max_key_length_]();
     root_node_->parent_ = superroot_;
     update_superroot_pointer();
   }
@@ -1916,12 +1917,19 @@ public:
     //According to my insight, linear model would be monotonically increasing
     //So I think we could compute key corresponding to mid_bucketID as
     //average of min/max key of current splitting node.
-    pthread_rwlock_rdlock(&(parent->children_rw_lock_));
-    for (unsigned int i = 0; i < max_key_length_; i++) {
-      tmpkey.key_arr_[i] = (parent->children_[i]->pivot_key_.key_arr_[i]
-                        +  old_node->pivot_key_.key_arr_[i]) / 2;
+    if (end_bucketID >= 1 << parent->duplication_factor_) {
+      for (unsigned int i = 0; i < max_key_length_; i++) {
+        tmpkey.key_arr_[i] = (STR_VAL_MAX + old_node->pivot_key_.key_arr_[i]) / 2;
+      }
     }
-    pthread_rwlock_unlock(&(parent->children_rw_lock_));
+    else {
+      pthread_rwlock_rdlock(&(parent->children_rw_lock_));
+      for (unsigned int i = 0; i < max_key_length_; i++) {
+        tmpkey.key_arr_[i] = (parent->children_[end_bucketID]->pivot_key_.key_arr_[i]
+                            + old_node->pivot_key_.key_arr_[i]) / 2;
+      }
+      pthread_rwlock_unlock(&(parent->children_rw_lock_));
+    }
     
     right_boundary = old_node->lower_bound(tmpkey);
     // Account for off-by-one errors due to floating-point precision issues.
@@ -2022,20 +2030,6 @@ public:
           fanout_tree_depth - tree_node.level + extra_duplication_factor);
       int child_node_repeats = 1 << duplication_factor;
       right_boundary = tree_node.right_boundary;
-      // Account for off-by-one errors due to floating-point precision issues.
-      tree_node.num_keys -= num_reassigned_keys;
-      num_reassigned_keys = 0;
-      while (right_boundary < old_node->data_capacity_) {
-        AlexKey<T> old_node_rbkey = old_node->get_key(right_boundary);
-        if (this_ptr->key_equal(old_node_rbkey, old_node->kEndSentinel_)) {break;}
-        if (parent->model_.predict(old_node->get_key(right_boundary)) >=
-                 cur + child_node_repeats) {break;}
-        num_reassigned_keys++;
-        right_boundary = std::min(
-            old_node->get_next_filled_position(right_boundary, false) + 1,
-            old_node->data_capacity_);
-      }
-      tree_node.num_keys += num_reassigned_keys;
       data_node_type* child_node = bulk_load_leaf_node_from_existing(
           old_node, left_boundary, right_boundary, worker_id, this_ptr, false, &tree_node);
 #if DEBUG_PRINT
@@ -2244,7 +2238,6 @@ public:
       return tmp;
     }
 
-#if ALEX_DATA_NODE_SEP_ARRAYS
     // Does not return a reference because keys and payloads are stored
     // separately.
     // If possible, use key() and payload() instead.
@@ -2252,10 +2245,6 @@ public:
       return std::make_pair(cur_leaf_->key_slots_[cur_idx_],
                             cur_leaf_->payload_slots_[cur_idx_].val_);
     }
-#else
-    // If data node stores key-payload pairs contiguously, return reference to V
-    V& operator*() const { return cur_leaf_->data_slots_[cur_idx_]; }
-#endif
 
     const AlexKey<T>& key() const {return ((data_node_type *) cur_leaf_)->get_key(cur_idx_); }
 
@@ -2366,7 +2355,6 @@ public:
       return tmp;
     }
 
-#if ALEX_DATA_NODE_SEP_ARRAYS
     // Does not return a reference because keys and payloads are stored
     // separately.
     // If possible, use key() and payload() instead.
@@ -2374,10 +2362,6 @@ public:
       return std::make_pair(cur_leaf_->key_slots_[cur_idx_],
                             cur_leaf_->payload_slots_[cur_idx_]);
     }
-#else
-    // If data node stores key-payload pairs contiguously, return reference to V
-    const V& operator*() const { return cur_leaf_->data_slots_[cur_idx_]; }
-#endif
 
     const AlexKey<T>& key() const { return cur_leaf_->get_key(cur_idx_); }
 
@@ -2477,7 +2461,6 @@ public:
       return tmp;
     }
 
-#if ALEX_DATA_NODE_SEP_ARRAYS
     // Does not return a reference because keys and payloads are stored
     // separately.
     // If possible, use key() and payload() instead.
@@ -2485,10 +2468,6 @@ public:
       return std::make_pair(cur_leaf_->key_slots_[cur_idx_],
                             cur_leaf_->payload_slots_[cur_idx_]);
     }
-#else
-    // If data node stores key-payload pairs contiguously, return reference to V
-    V& operator*() const { return cur_leaf_->data_slots_[cur_idx_]; }
-#endif
 
     const AlexKey<T>& key() const { return cur_leaf_->get_key(cur_idx_); }
 
@@ -2603,7 +2582,6 @@ public:
       return tmp;
     }
 
-#if ALEX_DATA_NODE_SEP_ARRAYS
     // Does not return a reference because keys and payloads are stored
     // separately.
     // If possible, use key() and payload() instead.
@@ -2611,10 +2589,6 @@ public:
       return std::make_pair(cur_leaf_->key_slots_[cur_idx_],
                             cur_leaf_->payload_slots_[cur_idx_]);
     }
-#else
-    // If data node stores key-payload pairs contiguously, return reference to V
-    const V& operator*() const { return cur_leaf_->data_slots_[cur_idx_]; }
-#endif
 
     const AlexKey<T>& key() const { return cur_leaf_->get_key(cur_idx_); }
 

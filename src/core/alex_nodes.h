@@ -13,17 +13,8 @@
 #include "alex_base.h"
 #include <map>
 
-// Whether we store key and payload arrays separately in data nodes
-// By default, we store them separately
-#define ALEX_DATA_NODE_SEP_ARRAYS 1
-
-#if ALEX_DATA_NODE_SEP_ARRAYS
 #define ALEX_DATA_NODE_KEY_AT(i) key_slots_[i]
 #define ALEX_DATA_NODE_PAYLOAD_AT(i) payload_slots_[i]
-#else
-#define ALEX_DATA_NODE_KEY_AT(i) data_slots_[i].first
-#define ALEX_DATA_NODE_PAYLOAD_AT(i) data_slots_[i].second.read()
-#endif
 
 // Whether we use lzcnt and tzcnt when manipulating a bitmap (e.g., when finding
 // the closest gap).
@@ -226,20 +217,12 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   AtomicVal<self_type*> pending_left_leaf_ = AtomicVal<self_type*>(nullptr);
   AtomicVal<self_type*> pending_right_leaf_ = AtomicVal<self_type*>(nullptr);
 
-#if ALEX_DATA_NODE_SEP_ARRAYS
   AlexKey<T>* key_slots_ = nullptr;  // holds keys
   P* payload_slots_ =
       nullptr;  // holds payloads, must be same size as key_slots
-#else
-  AV* data_slots_ = nullptr;  // holds key-payload pairs
-#endif
 
   pthread_mutex_t insert_mutex = PTHREAD_MUTEX_INITIALIZER;
   pthread_rwlock_t key_array_rw_lock = PTHREAD_RWLOCK_INITIALIZER; 
-
-  /* Below are unused attributes */
-  //unsigned int max_key_length_ = 1; // maximum length of each key 
-  //int key_type_ = DOUBLE; // key type for specific node.
 
   int data_capacity_ = 0;  // size of key/data_slots array
   int num_keys_ = 0;  // number of filled key/data slots (as opposed to gaps)
@@ -346,18 +329,11 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   }
 
   ~AlexDataNode() {
-#if ALEX_DATA_NODE_SEP_ARRAYS
     if (key_slots_ != nullptr) {
       delete[] key_slots_;
       payload_allocator().deallocate(payload_slots_, data_capacity_);
       bitmap_allocator().deallocate(bitmap_, bitmap_size_);
     }
-#else
-    if (data_slots_ != nullptr) {
-      atomic_value_allocator().deallocate(data_slots_, data_capacity_);
-      bitmap_allocator().deallocate(bitmap_, bitmap_size_);
-    }
-#endif
     delete[] the_max_key_arr_;
     delete[] the_min_key_arr_;
     pthread_rwlock_destroy(&key_array_rw_lock);
@@ -403,7 +379,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     prev_leaf_.val_ = other.prev_leaf_.val_;
     next_leaf_.val_ = other.next_leaf_.val_;
 
-#if ALEX_DATA_NODE_SEP_ARRAYS
     key_slots_ = new AlexKey<T>[other.data_capacity_]();
     std::copy(other.key_slots_, other.key_slots_ + other.data_capacity_,
               key_slots_);
@@ -411,12 +386,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         P[other.data_capacity_];
     std::copy(other.payload_slots_, other.payload_slots_ + other.data_capacity_,
               payload_slots_);
-#else
-    data_slots_ = new (atomic_value_allocator().allocate(other.data_capacity_))
-        AV[other.data_capacity_];
-    std::copy(other.data_slots_, other.data_slots_ + other.data_capacity_,
-              data_slots_);
-#endif
     bitmap_ = new (bitmap_allocator().allocate(other.bitmap_size_))
         uint64_t[other.bitmap_size_];
     std::copy(other.bitmap_, other.bitmap_ + other.bitmap_size_, bitmap_);
@@ -627,31 +596,17 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       cur_bitmap_data_ = remove_rightmost_one(cur_bitmap_data_);
     }
 
-#if ALEX_DATA_NODE_SEP_ARRAYS
     AV operator*() const {
       return std::make_pair(node_->key_slots_[cur_idx_],
                             node_->payload_slots_[cur_idx_]);
     }
-#else
-    atomic_value_return_type& operator*() const {
-      return node_->data_slots_[cur_idx_];
-    }
-#endif
 
     const AlexKey<T>& key() const {
-#if ALEX_DATA_NODE_SEP_ARRAYS
       return node_->key_slots_[cur_idx_];
-#else
-      return node_->data_slots_[cur_idx_].first;
-#endif
     }
 
     atomic_payload_return_type& payload() const {
-#if ALEX_DATA_NODE_SEP_ARRAYS
       return node_->payload_slots_[cur_idx_];
-#else
-      return node_->data_slots_[cur_idx_].second;
-#endif
     }
 
     bool is_end() const { return cur_idx_ == -1; }
@@ -1128,14 +1083,9 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     bitmap_size_ = static_cast<size_t>(std::ceil(data_capacity_ / 64.));
     bitmap_ = new (bitmap_allocator().allocate(bitmap_size_))
         uint64_t[bitmap_size_]();  // initialize to all false
-#if ALEX_DATA_NODE_SEP_ARRAYS
     key_slots_ = new AlexKey<T>[data_capacity_]();
     payload_slots_ =
         new (payload_allocator().allocate(data_capacity_)) P[data_capacity_];
-#else
-    data_slots_ =
-        new (atomic_value_allocator().allocate(data_capacity_)) AV[data_capacity];
-#endif
   }
 
   // Assumes pretrained_model is trained on dense array of keys
@@ -1188,12 +1138,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
           ALEX_DATA_NODE_KEY_AT(j) = values[i].first;
         }
         for (int j = i; j < num_keys; j++) {
-#if ALEX_DATA_NODE_SEP_ARRAYS
           key_slots_[pos] = values[j].first;
           payload_slots_[pos] = values[j].second;
-#else
-          data_slots_[pos] = values[j];
-#endif
           set_bit(pos);
           pos++;
         }
@@ -1205,12 +1151,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         ALEX_DATA_NODE_KEY_AT(j) = values[i].first;
       }
 
-#if ALEX_DATA_NODE_SEP_ARRAYS
       key_slots_[position] = values[i].first;
       payload_slots_[position] = values[i].second;
-#else
-      data_slots_[position] = values[i];
-#endif
       set_bit(position);
 
       last_position = position;
@@ -1321,12 +1263,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
           ALEX_DATA_NODE_KEY_AT(j) = it.key();
         }
         for (; pos < data_capacity_; pos++, it++) {
-#if ALEX_DATA_NODE_SEP_ARRAYS
           key_slots_[pos] = it.key();
           payload_slots_[pos] = it.payload();
-#else
-          data_slots_[pos] = *it;
-#endif
           set_bit(pos);
         }
         last_position = pos - 1;
@@ -1337,12 +1275,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         ALEX_DATA_NODE_KEY_AT(j) = it.key();
       }
 
-#if ALEX_DATA_NODE_SEP_ARRAYS
       key_slots_[position] = it.key();
       payload_slots_[position] = it.payload();
-#else
-      data_slots_[position] = *it;
-#endif
       set_bit(position);
 
       last_position = position;
@@ -1825,15 +1759,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         static_cast<size_t>(std::ceil(new_data_capacity / 64.));
     auto new_bitmap = new (bitmap_allocator().allocate(new_bitmap_size))
         uint64_t[new_bitmap_size]();  // initialize to all false
-#if ALEX_DATA_NODE_SEP_ARRAYS
     AlexKey<T>* new_key_slots =
         new AlexKey<T>[new_data_capacity]();
     P* new_payload_slots = new (payload_allocator().allocate(new_data_capacity))
         P[new_data_capacity];
-#else
-    AV* new_data_slots = new (atomic_value_allocator().allocate(new_data_capacity))
-        AV[new_data_capacity];
-#endif
     LinearModel<T> new_model;
     std::copy(this->model_.a_, this->model_.a_ + max_key_length_, new_model.a_);
     new_model.b_ = this->model_.b_;
@@ -1876,19 +1805,11 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         // fill the rest of the store contiguously
         int pos = new_data_capacity - keys_remaining;
         for (int j = last_position + 1; j < pos; j++) {
-#if ALEX_DATA_NODE_SEP_ARRAYS
           new_key_slots[j] = it.key();
-#else
-          new_data_slots[j].first = it.key();
-#endif
         }
         for (; pos < new_data_capacity; pos++, it++) {
-#if ALEX_DATA_NODE_SEP_ARRAYS
           new_key_slots[pos] = it.key();
           new_payload_slots[pos] = it.payload();
-#else
-          new_data_slots[pos] = *it;
-#endif
           set_bit(new_bitmap, pos);
         }
         last_position = pos - 1;
@@ -1896,19 +1817,11 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       }
 
       for (int j = last_position + 1; j < position; j++) {
-#if ALEX_DATA_NODE_SEP_ARRAYS
         new_key_slots[j] = it.key();
-#else
-        new_data_slots[j].first = it.key();
-#endif
       }
 
-#if ALEX_DATA_NODE_SEP_ARRAYS
       new_key_slots[position] = it.key();
       new_payload_slots[position] = it.payload();
-#else
-      new_data_slots[position] = *it;
-#endif
       set_bit(new_bitmap, position);
 
       last_position = position;
@@ -1917,30 +1830,18 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     }
 
     for (int i = last_position + 1; i < new_data_capacity; i++) {
-#if ALEX_DATA_NODE_SEP_ARRAYS
       new_key_slots[i] = kEndSentinel_;
-#else
-      new_data_slots[i].first = kEndSentinel;
-#endif
     }
 
     pthread_rwlock_wrlock(&key_array_rw_lock); //since it's now altering data node itself.
-#if ALEX_DATA_NODE_SEP_ARRAYS
     delete[] key_slots_;
     payload_allocator().deallocate(payload_slots_, data_capacity_);
-#else
-    value_allocator().deallocate(data_slots_, data_capacity_);
-#endif
     bitmap_allocator().deallocate(bitmap_, bitmap_size_);
 
     data_capacity_ = new_data_capacity;
     bitmap_size_ = new_bitmap_size;
-#if ALEX_DATA_NODE_SEP_ARRAYS
     key_slots_ = new_key_slots;
     payload_slots_ = new_payload_slots;
-#else
-    data_slots_ = new_data_slots;
-#endif
     bitmap_ = new_bitmap;
 
     expansion_threshold_ =
@@ -1987,12 +1888,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 #endif
       pthread_rwlock_wrlock(&key_array_rw_lock); //synchronization
     }
-#if ALEX_DATA_NODE_SEP_ARRAYS
     key_slots_[pos] = key;
     payload_slots_[pos] = payload;
-#else
-    data_slots_[index] = std::make_pair(key, payload);
-#endif
     set_bit(pos);
 
     // Overwrite preceding gaps until we reach the previous element
@@ -2029,12 +1926,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     pthread_rwlock_wrlock(&key_array_rw_lock); //for synchronization.
     if (gap_pos >= pos) {
       for (int i = gap_pos; i > pos; i--) {
-#if ALEX_DATA_NODE_SEP_ARRAYS
         key_slots_[i] = key_slots_[i - 1];
         payload_slots_[i] = payload_slots_[i - 1];
-#else
-        data_slots_[i] = data_slots_[i - 1];
-#endif
       }
       insert_element_at(key, payload, pos, worker_id);
       pthread_rwlock_unlock(&key_array_rw_lock);
@@ -2051,12 +1944,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       return pos;
     } else {
       for (int i = gap_pos; i < pos - 1; i++) {
-#if ALEX_DATA_NODE_SEP_ARRAYS
         key_slots_[i] = key_slots_[i + 1];
         payload_slots_[i] = payload_slots_[i + 1];
-#else
-        data_slots_[i] = data_slots_[i + 1];
-#endif
       }
       insert_element_at(key, payload, pos - 1, worker_id);
       pthread_rwlock_unlock(&key_array_rw_lock);

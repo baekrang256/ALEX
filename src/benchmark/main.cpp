@@ -547,12 +547,10 @@ void *run_fg(void *param) {
 
   alex::config.rcu_status[thread_id].waiting = true;
 
-#if DEBUG_PRINT
   alex::coutLock.lock();
   std::cout << "worker id : " << thread_id
             << " finished" << std::endl;
   alex::coutLock.unlock();
-#endif
 
   pthread_exit(nullptr);
 }
