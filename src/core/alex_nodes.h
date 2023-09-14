@@ -188,16 +188,13 @@ template <class T, class P, class Compare = AlexCompare,
 class AlexDataNode : public AlexNode<T, P, Alloc> {
  public:
   typedef std::pair<AlexKey<T>, P> V;
-  typedef std::pair<AlexKey<T>, AtomicVal<P>> AV;
   typedef AlexNode<T, P, Alloc> basic_node_type;
   typedef AlexModelNode<T, P, Alloc> model_node_type;
   typedef AlexDataNode<T, P, Compare, Alloc, allow_duplicates> self_type;
   typedef typename Alloc::template rebind<AlexKey<T>>::other key_alloc_type;
   typedef typename Alloc::template rebind<self_type>::other alloc_type;
   typedef typename Alloc::template rebind<P>::other payload_alloc_type;
-  typedef typename Alloc::template rebind<AtomicVal<P>>::other atomic_payload_alloc_type;
   typedef typename Alloc::template rebind<V>::other value_alloc_type;
-  typedef typename Alloc::template rebind<AV>::other atomic_value_alloc_type;
   typedef typename Alloc::template rebind<uint64_t>::other bitmap_alloc_type;
   typedef typename Alloc::template rebind<basic_node_type*>::other
       pointer_alloc_type;
@@ -206,11 +203,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   const Alloc& allocator_;
 
   // Forward declaration
-  template <typename node_type = self_type, typename atomic_payload_return_type = AtomicVal<P>,
-            typename atomic_value_return_type = AV>
+  template <typename node_type = self_type>
   class Iterator;
   typedef Iterator<> iterator_type;
-  typedef Iterator<const self_type, const P, const V> const_iterator_type;
+  typedef Iterator<const self_type> const_iterator_type;
 
   AtomicVal<self_type*> next_leaf_ = AtomicVal<self_type*>(nullptr);
   AtomicVal<self_type*> prev_leaf_ = AtomicVal<self_type*>(nullptr);
@@ -404,13 +400,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     return key_alloc_type(allocator_);
   }
 
-  atomic_payload_alloc_type atomic_payload_allocator() {
-    return atomic_payload_alloc_type(allocator_);
-  }
-
   value_alloc_type value_allocator() { return value_alloc_type(allocator_); }
-
-  atomic_value_alloc_type atomic_value_allocator() {return atomic_value_alloc_type(allocator_);}
 
   bitmap_alloc_type bitmap_allocator() { return bitmap_alloc_type(allocator_); }
 
@@ -555,8 +545,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // Forward iterator meant for iterating over a single data node.
   // By default, it is a "normal" non-const iterator.
   // Can be templated to be a const iterator.
-  template <typename node_type, typename atomic_payload_return_type,
-            typename atomic_value_return_type>
+  template <typename node_type>
   class Iterator {
    public:
     node_type* node_;
@@ -596,7 +585,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       cur_bitmap_data_ = remove_rightmost_one(cur_bitmap_data_);
     }
 
-    AV operator*() const {
+    V operator*() const {
       return std::make_pair(node_->key_slots_[cur_idx_],
                             node_->payload_slots_[cur_idx_]);
     }
@@ -605,7 +594,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       return node_->key_slots_[cur_idx_];
     }
 
-    atomic_payload_return_type& payload() const {
+    P& payload() const {
       return node_->payload_slots_[cur_idx_];
     }
 

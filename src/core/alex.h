@@ -2022,7 +2022,6 @@ public:
     int right_boundary = 0;
     // Keys may be re-assigned to an adjacent fanout tree node due to off-by-one
     // errors
-    int num_reassigned_keys = 0;
     int first_iter = 1;
     for (fanout_tree::FTNode& tree_node : used_fanout_tree_nodes) {
       left_boundary = right_boundary;
