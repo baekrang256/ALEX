@@ -67,24 +67,22 @@ static double merge_nodes_upwards(
     int level_fanout = 1 << level;
     bool at_least_one_merge = false;
     for (int i = 0; i < level_fanout / 2; i++) {
-      if (fanout_tree[level][2 * i].use && fanout_tree[level][2 * i + 1].use) {
+      if (fanout_tree[level][2*i].use && fanout_tree[level][2*i+1].use) {
         int num_node_keys = fanout_tree[level - 1][i].num_keys;
         int num_left_keys = fanout_tree[level][2 * i].num_keys;
         int num_right_keys = fanout_tree[level][2 * i + 1].num_keys;
         double merging_cost_saving =
-            (fanout_tree[level][2 * i].cost * num_left_keys / num_node_keys) +
-            (fanout_tree[level][2 * i + 1].cost * num_right_keys /
-             num_node_keys) -
+            (fanout_tree[level][2*i].cost * num_left_keys / num_node_keys) +
+            (fanout_tree[level][2*i+1].cost * num_right_keys / num_node_keys) -
             fanout_tree[level - 1][i].cost +
-            (kModelSizeWeight * sizeof(AlexDataNode<T, P>) * total_keys /
-             num_node_keys);
+            (kModelSizeWeight * sizeof(AlexDataNode<T, P>) * total_keys / num_node_keys);
         if (merging_cost_saving >= 0) {
           if (fanout_tree[level][2*i].left_boundary != fanout_tree[level-1][i].left_boundary
             ||fanout_tree[level][2*i+1].right_boundary != fanout_tree[level-1][i].right_boundary)
           {continue;} //shouldn't happen. semantic issue.
-          fanout_tree[level][2 * i].use = false;
-          fanout_tree[level][2 * i + 1].use = false;
-          fanout_tree[level - 1][i].use = true;
+          fanout_tree[level][2*i].use = false;
+          fanout_tree[level][2*i+1].use = false;
+          fanout_tree[level-1][i].use = true;
           best_cost -= merging_cost_saving * num_node_keys / num_keys;
           at_least_one_merge = true;
 #if DEBUG_PRINT
@@ -568,8 +566,7 @@ std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node
   }
 
   // Merge nodes to improve cost
-  merge_nodes_upwards<T, P>(best_level, best_cost, num_keys, total_keys,
-                            fanout_tree);
+  merge_nodes_upwards<T, P>(best_level, best_cost, num_keys, total_keys, fanout_tree);
 
   collect_used_nodes(fanout_tree, best_level, used_fanout_tree_nodes);
 #if PROFILE
