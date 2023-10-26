@@ -21,6 +21,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <random>
 #include <set>
 #include <string>
@@ -62,6 +63,16 @@ typedef unsigned __int32 uint32_t;
 /*** string's limit value ***/
 #define STR_VAL_MAX 126
 #define STR_VAL_MIN 33
+
+/*** insertion location ***/
+#define INSERT_AT_DATA 0
+#define INSERT_AT_DELTA 1
+#define INSERT_AT_TMPDELTA 2
+
+/*** Mode ***/
+#define KEY_ARR 0
+#define DELTA_IDX 1
+#define TMP_DELTA_IDX 2
 
 /*** debug print ***/
 #define DEBUG_PRINT 0
@@ -1474,17 +1485,17 @@ struct AtomicVal {
   void lock() {
 #if PROFILE
     profileStats.lock_achieve_cnt++;
-#endif
     auto lock_start_time = std::chrono::high_resolution_clock::now();
+#endif
     while (true) {
       uint64_t old = status;
       uint64_t expected = old & ~lock_mask;  // expect to be unlocked
       uint64_t desired = old | lock_mask;    // desire to lock
       if (likely(cmpxchg((uint64_t *)&this->status, expected, desired) ==
                  expected)) {
+#if PROFILE
         auto lock_end_time = std::chrono::high_resolution_clock::now();
         auto elapsed_time = std::chrono::duration_cast<std::chrono::nanoseconds>(lock_end_time - lock_start_time).count();
-#if PROFILE
         profileStats.lock_achieve_time += elapsed_time;
 #endif
         return;
@@ -1630,7 +1641,7 @@ struct IndexConfig {
   double buffer_size_tolerance = 3;
   size_t buffer_compact_threshold = 8;
   size_t worker_n = 0;
-  uint32_t max_bgnum = 10000;
+  uint32_t max_bgnum = 10;
   std::unique_ptr<rcu_status_t[]> rcu_status;
   volatile bool exited = false;
 };
@@ -1704,4 +1715,10 @@ void rcu_barrier(const uint32_t worker_id) {
   coutLock.unlock();
 #endif
 }
+
+/* for joining background threads */
+std::mutex cvm;
+std::condition_variable cv;
+std::queue<pthread_t> join_pending_threads_;
+
 }

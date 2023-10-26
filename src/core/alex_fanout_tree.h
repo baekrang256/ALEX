@@ -143,15 +143,14 @@ void push_node(const std::pair<AlexKey<T>, P> values[], int num_keys,
 //push node to new_level
 //used in find_best_fanout_existing_node
 template <class T, class P>
-void push_node_from_existing (AlexDataNode<T, P>* node, int left_boundary, int right_boundary,
-                              int num_keys, double& cost, int i,
+void push_node_from_existing (AlexDataNode<T, P>* node, AlexKey<T>** node_keys, int left_boundary,
+                              int right_boundary, int num_keys, double& cost, int i,
                               std::vector<FTNode>& new_level, int fanout_tree_level, int worker_id) {
   int num_actual_keys = 0;
   LinearModel<T> model;
   LinearModelBuilder<T> builder(&model);
-  auto it = typename AlexDataNode<T, P>::const_iterator_type(node, left_boundary);
-  for (int j = 0; it.cur_idx_ < right_boundary && !it.is_end(); it++, j++) {
-    builder.add(it.key(), j);
+  for (int j = 0, it = left_boundary; it < right_boundary; j++, it++) {
+    builder.add(*node_keys[it], j);
     num_actual_keys++;
   }
 #if PROFILE
@@ -172,7 +171,7 @@ void push_node_from_existing (AlexDataNode<T, P>* node, int left_boundary, int r
   DataNodeStats stats;
   double node_cost =
       AlexDataNode<T, P>::compute_expected_cost_from_existing(
-          node, left_boundary, right_boundary,
+          node_keys, left_boundary, right_boundary,
           AlexDataNode<T, P>::kInitDensity_, empirical_insert_frac, &model,
           &stats);
 
@@ -186,7 +185,7 @@ void push_node_from_existing (AlexDataNode<T, P>* node, int left_boundary, int r
                        num_actual_keys});
 #if DEBUG_PRINT
         alex::coutLock.lock();
-        std::cout << "t" << worker_id << " - ";
+        std::cout << "t" << worker_id << "'s generated thread - ";
         std::cout << "left boundary is : " <<  left_boundary << '\n';
         std::cout << "right boundary is : " << right_boundary << std::endl;
         alex::coutLock.unlock();
@@ -356,7 +355,7 @@ std::pair<int, double> find_best_fanout_bottom_up(
     }
   }
 #if DEBUG_PRINT
-  //std::cout << "find_best_fanout_bottom_up finished" << std::endl;
+  std::cout << "find_best_fanout_bottom_up finished" << std::endl;
 #endif
   return std::make_pair(best_level, best_cost);
 }
@@ -368,8 +367,11 @@ std::pair<int, double> find_best_fanout_bottom_up(
 // This mirrors the logic of finding the best fanout "bottom-up" when bulk
 // loading.
 // Returns the depth of the best fanout tree.
+// unlike original ALEX, we give an ordered sets of key and payload as parameter
 template <class T, class P>
-std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node, int total_keys,
+std::pair<int, double *> find_best_fanout_existing_node(
+                                   AlexDataNode<T, P>* node, AlexKey<T>** node_keys, 
+                                   LinearModel<T> &tmp_model, int total_keys, int num_keys,
                                    std::vector<FTNode>& used_fanout_tree_nodes, int max_fanout,
                                    uint32_t worker_id) {
   // Repeatedly add levels to the fanout tree until the overall cost of each
@@ -378,61 +380,17 @@ std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node
   profileStats.find_best_fanout_existing_node_call_cnt++;
   auto find_fanout_existing_node_start_time = std::chrono::high_resolution_clock::now();
 #endif
-  int num_keys = node->num_keys_;
   int best_level = 0;
   double *best_param = new double[max_key_length_ + 1]();
   double best_cost = std::numeric_limits<double>::max();
   std::vector<double> fanout_costs;
   std::vector<std::vector<FTNode>> fanout_tree;
 
-  /* For each fanout we make corresponding model for string keys
-   * by doing model building. Process is similar to bulk_load_node. */
-  typedef typename AlexDataNode<T, P>::const_iterator_type iterator;
-  LinearModel<T> tmp_model;
-  LinearModelBuilder<T> tmp_model_builder(&tmp_model);
-  iterator it(node, 0);
-  int *key_idx = new int[num_keys];
-  size_t key_cnt = 0;
-#if DEBUG_PRINT
-  alex::coutLock.lock();
-  std::cout << "t" << worker_id << " - ";
-  std::cout << "note that node's key count is : " << num_keys << std::endl;
-  alex::coutLock.unlock();
-#endif
-  while (it.cur_idx_ != -1) {
-    tmp_model_builder.add(it.key(), ((double) key_cnt / (node->num_keys_ - 1)));
-    key_idx[key_cnt] = it.cur_idx_; 
-    key_cnt++;
-    it++;
-#if DEBUG_PRINT
-  //alex::coutLock.lock();
-  //std::cout << "t" << worker_id << " - ";
-  //std::cout << "key_cnt is " << key_cnt << '\n';
-  //std::cout << "next it idx is " << it.cur_idx_ << std::endl;
-  //alex::coutLock.unlock();
-#endif
-  }
-
-#if PROFILE
-  auto fanout_model_train_start_time = std::chrono::high_resolution_clock::now();
-  profileStats.fanout_model_train_cnt++;
-#endif
-  tmp_model_builder.build();
-#if PROFILE
-  auto fanout_model_train_end_time = std::chrono::high_resolution_clock::now();
-  auto train_elapsed_time = std::chrono::duration_cast<std::chrono::bgTimeUnit>(fanout_model_train_end_time - fanout_model_train_start_time).count();
-  profileStats.fanout_model_train_time += train_elapsed_time;
-  profileStats.max_fanout_model_train_time =
-    std::max(profileStats.max_fanout_model_train_time.load(), train_elapsed_time);
-  profileStats.min_fanout_model_train_time =
-    std::min(profileStats.min_fanout_model_train_time.load(), train_elapsed_time);
-#endif
-
   for (int fanout = 1, fanout_tree_level = 0; fanout <= max_fanout;
        fanout *= 2, fanout_tree_level++) {
 #if DEBUG_PRINT
     alex::coutLock.lock();
-    std::cout << "t" << worker_id << " - ";
+    std::cout << "t" << worker_id << "'s generated thread - ";
     std::cout << "find_best_fanout_existing_node searching for boundary with fanout : " << fanout << std::endl;
     alex::coutLock.unlock();
 #endif
@@ -446,29 +404,29 @@ std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node
 
 #if DEBUG_PRINT
     alex::coutLock.lock();
-    std::cout << "t" << worker_id << " - ";
-    std::cout << "first key predicted as" << tmp_model.predict_double(node->key_slots_[node->first_pos()]) << '\n';
-    std::cout << "last key predicted as" << tmp_model.predict_double(node->key_slots_[node->last_pos()]) << std::endl;
+    std::cout << "t" << worker_id << "'s generated thread - ";
+    std::cout << "first key predicted as" << tmp_model.predict_double(*node_keys[0]) << '\n';
+    std::cout << "last key predicted as" << tmp_model.predict_double(*node_keys[num_keys-1]) << std::endl;
     alex::coutLock.unlock();
 #endif
 
-    int left_boundary_key_pos = 0;
-    int right_boundary_key_pos = 0;
+    int left_boundary = 0;
+    int right_boundary = 0;
 #if PROFILE
       auto fanout_batch_stat_start_time = std::chrono::high_resolution_clock::now();
       profileStats.fanout_batch_stat_cnt++;
 #endif
     for (int i = 0; i < fanout; i++) {
-      left_boundary_key_pos = right_boundary_key_pos;
-      if (i == fanout - 1) {right_boundary_key_pos = num_keys;}
+      left_boundary = right_boundary;
+      if (i == fanout - 1) {right_boundary = num_keys;}
       else {
         //binary searching for boundary
-        int left_idx = left_boundary_key_pos;
+        int left_idx = left_boundary;
         int right_idx = num_keys;
         int mid = left_idx + (right_idx - left_idx) / 2;
 
         while (left_idx < right_idx) {
-          int predicted_pos = tmp_model.predict(node->key_slots_[key_idx[mid]]);
+          int predicted_pos = tmp_model.predict(*node_keys[mid]);
           if (predicted_pos <= i) {
             left_idx = mid + 1;
           } else {
@@ -476,34 +434,28 @@ std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node
           }
           mid = left_idx + (right_idx - left_idx) / 2;
         }
-        right_boundary_key_pos = left_idx;
+        right_boundary = left_idx;
       }
 
-      if (left_boundary_key_pos == right_boundary_key_pos) {
-        right_boundary_key_pos++;
+      if (left_boundary == right_boundary) {
+        right_boundary++;
       }
-      if (num_keys - right_boundary_key_pos < fanout - i - 1) {
+      if (num_keys - right_boundary < fanout - i - 1) {
         //not enough keys... put 1 keys each for remaining data node
-        right_boundary_key_pos = num_keys - (fanout - i - 1);
-        int left_boundary = key_idx[left_boundary_key_pos];
-        int right_boundary = right_boundary_key_pos == num_keys ? node->data_capacity_ : key_idx[right_boundary_key_pos];
-        push_node_from_existing(node, left_boundary, right_boundary, num_keys,
+        right_boundary = num_keys - (fanout - i - 1);
+        push_node_from_existing(node, node_keys, left_boundary, right_boundary, num_keys,
                                 cost, i, new_level, fanout_tree_level, worker_id);
         for (int j = i + 1; j < fanout; j++) {
-          left_boundary_key_pos = right_boundary_key_pos;
-          right_boundary_key_pos++;
-          left_boundary = key_idx[left_boundary_key_pos];
-          right_boundary = right_boundary_key_pos == num_keys ? node->data_capacity_ : key_idx[right_boundary_key_pos];
-          push_node_from_existing(node, left_boundary, right_boundary, num_keys,
+          left_boundary = right_boundary;
+          right_boundary++;
+          push_node_from_existing(node, node_keys, left_boundary, right_boundary, num_keys,
                                   cost, j, new_level, fanout_tree_level, worker_id);
         }
         break;
       }
       else {
         //normal case
-        int left_boundary = key_idx[left_boundary_key_pos];
-        int right_boundary = right_boundary_key_pos == num_keys ? node->data_capacity_ : key_idx[right_boundary_key_pos];
-        push_node_from_existing(node, left_boundary, right_boundary, num_keys,
+        push_node_from_existing(node, node_keys, left_boundary, right_boundary, num_keys,
                                 cost, i, new_level, fanout_tree_level, worker_id);
       }
     }
@@ -542,7 +494,7 @@ std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node
 
 #if DEBUG_PRINT
     alex::coutLock.lock();
-    std::cout << "t" << worker_id << " - ";
+    std::cout << "t" << worker_id << "'s generated thread - ";
     std::cout << "find_best_fanout_existing_node boundary searching finished for fanout " << fanout << std::endl;
     alex::coutLock.unlock();
 #endif
@@ -550,7 +502,7 @@ std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node
 
 #if DEBUG_PRINT
     alex::coutLock.lock();
-    std::cout << "t" << worker_id << " - ";
+    std::cout << "t" << worker_id << "'s generated thread - ";
     std::cout << "chosen best level is : " << (1 << best_level) << std::endl;
     alex::coutLock.unlock();
 #endif
@@ -579,8 +531,6 @@ std::pair<int, double *> find_best_fanout_existing_node(AlexDataNode<T, P>* node
     std::min(profileStats.min_find_best_fanout_existing_node_time.load(), elapsed_time);
 #endif
 
-  delete[] key_idx;
-    
   return {best_level, best_param};
 }
 

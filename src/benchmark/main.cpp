@@ -25,6 +25,7 @@
 struct FGParam;
 typedef FGParam fg_param_t;
 void *run_fg(void *param);
+void *join_backgrounds(void *param);
 
 struct FGParam {
   uint32_t thread_id;
@@ -33,6 +34,8 @@ struct FGParam {
 //for multithreading synchronization
 std::atomic<bool> running(false);
 std::atomic<size_t> ready_threads(0);
+bool ready = false;
+bool foreground_finished = true;
 
 //common read-only data used for each threads
 alex::AlexKey<KEY_TYPE> *keys = nullptr;
@@ -46,7 +49,7 @@ bool strict_read = false;
 bool strict_insert = false;
 uint64_t total_num_keys = 1;
 uint32_t fg_num = 1;
-uint32_t bg_num = 10000;
+uint32_t bg_num = 10;
 uint64_t num_actual_ops_perth;
 uint64_t num_actual_lookups_perth;
 uint64_t num_actual_inserts_perth;
@@ -59,8 +62,7 @@ uint64_t num_actual_inserts_perth;
  * --total_num_keys         total number of keys in the keys file
  * --batch_size             number of operations (lookup or insert) per batch for all threads
  * --fg_thread_num          number of foreground threads
- * --bg_thread_num          max number of background threads (for model modification)
- * 
+ *         
  * Optional flags:
  * --insert_frac            fraction of operations that are inserts (instead of lookups)
  * --lookup_distribution    lookup keys distribution (options: uniform or zipf)
@@ -70,7 +72,7 @@ uint64_t num_actual_inserts_perth;
  * --print_key_stats        key related stat print
  * --strict_read            abort when failed finding payload
  * --strict_insert          abort when failed finding leaf node to insert key
- * --do_profile             profile stats
+ * --bg_thread_num          maximum number of background threads. Default is 10.
  */
 int main(int argc, char* argv[]) {
   auto flags = parse_flags(argc, argv);
@@ -80,7 +82,7 @@ int main(int argc, char* argv[]) {
   total_num_keys = stoi(get_required(flags, "total_num_keys"));
   auto batch_size = stoi(get_required(flags, "batch_size"));
   fg_num = stoi(get_required(flags, "fg_thread_num"));
-  bg_num = stoi(get_required(flags, "bg_thread_num"));
+  bg_num = stoi(get_with_default(flags, "bg_thread_num", "10"));
   auto insert_frac = stod(get_with_default(flags, "insert_frac", "0.5"));
   lookup_distribution =
       get_with_default(flags, "lookup_distribution", "zipf");
@@ -157,7 +159,6 @@ int main(int argc, char* argv[]) {
   table = &index;
   insertion_ratio = insert_frac;
 
-  auto workload_start_time = std::chrono::high_resolution_clock::now();
   int batch_no = 0;
   double cumulative_time = 0.0;
   long long cumulative_operations = 0;
@@ -169,6 +170,28 @@ int main(int argc, char* argv[]) {
 #if PROFILE
   alex::profileStats.profileInit(fg_num);
 #endif
+
+  //prepare thread joining background threads
+  pthread_t background_join_thread;
+  foreground_finished = false;
+  int ret = pthread_create(&background_join_thread, nullptr, join_backgrounds,nullptr);
+  if (ret) {
+    std::cout << "Error when making threads with code : " << ret << std::endl;
+    abort();
+  }
+  
+  while (true) {
+    alex::cvm.lock();
+    if (ready == true) {
+      alex::cvm.unlock();
+      break;
+    }
+    alex::cvm.unlock();
+    sleep(0.1);
+  }
+
+  //now workload starts
+  auto workload_start_time = std::chrono::high_resolution_clock::now();
 
   // Run workload
   while (true) {
@@ -261,6 +284,15 @@ int main(int argc, char* argv[]) {
             << cumulative_operations / cumulative_time * 1e9 << " ops/sec"
             << std::endl;
 
+  {
+    std::lock_guard<std::mutex> lk(alex::cvm);
+    foreground_finished = true;
+  }
+  alex::cv.notify_one();
+  pthread_join(background_join_thread, nullptr);
+
+  std::cout << "finishing" << std::endl;
+
   delete[] values;
   delete[] keys;
 #if PROFILE
@@ -300,9 +332,9 @@ void *run_fg(void *param) {
                        uint64_t, 
                        PAYLOAD_TYPE, 
                        alex::Alex<KEY_TYPE, PAYLOAD_TYPE>::model_node_type *>> pending_op;
-  //alex::coutLock.lock();
-  //std::cout << "worker " << thread_id << " ready to start" << std::endl;
-  //alex::coutLock.unlock();
+  alex::coutLock.lock();
+  std::cout << "worker " << thread_id << " ready to start" << std::endl;
+  alex::coutLock.unlock();
   ready_threads++;
 
   //wait
@@ -358,16 +390,19 @@ void *run_fg(void *param) {
         }
       }
       else { //succeeded.
+#if DEBUG_PRINT
+        alex::coutLock.lock();
+        std::cout << "t" << thread_id << " - ";
+        std::cout << "inserted key";
         if (print_key_stats) {
-          alex::coutLock.lock();
-          std::cout << "t" << thread_id << " - ";
-          std::cout << "inserted key : ";
+          std::cout << " which is : ";
           for (unsigned int j = 0; j < max_key_length; j++) {
             std::cout << keys[insertion_index].key_arr_[j];
           }
-          std::cout << std::endl;
-          alex::coutLock.unlock();
         }
+        std::cout << std::endl;
+        alex::coutLock.unlock();
+#endif
         ++insert_cnt;
         ++insertion_index;
       }
@@ -387,15 +422,20 @@ void *run_fg(void *param) {
 #endif
       auto read_result = table->get_payload(key, thread_id);
       if (!std::get<0>(read_result)) {
+#if DEBUG_PRINT
+        alex::coutLock.lock();
+        std::cout << "t" << thread_id << " - ";
+        std::cout << "read key";
         if (print_key_stats) {
-          alex::coutLock.lock();
-          std::cout << "t" << thread_id << " - ";
+          std::cout << " which is : ";
           for (unsigned int k = 0; k < max_key_length; k++) {
             std::cout << key.key_arr_[k];
           }
-          std::cout << " payload is : " << std::get<1>(read_result) << std::endl;
-          alex::coutLock.unlock();
+          std::cout << std::get<1>(read_result);
         }
+        std::cout << std::endl;
+        alex::coutLock.unlock();
+#endif
       }
       else {
         //NEED TO HANDLE READ FAILURE CASE
@@ -460,12 +500,12 @@ void *run_fg(void *param) {
         }
         else if (!std::get<0>(insert_result).cur_leaf_) {
           //failed because leaf is being modified/resizing.
-  #if DEBUG_PRINT
+#if DEBUG_PRINT
           alex::coutLock.lock();
           std::cout << "worker id : " << thread_id
                     << " failed because node being modified. re-insertion post-poned" << std::endl;
           alex::coutLock.unlock();
-  #endif
+#endif
           pending_op.push_back(op_param);
         }
         else {
@@ -479,16 +519,19 @@ void *run_fg(void *param) {
         }
       }
       else { //succeeded.
+#if DEBUG_PRINT
+        alex::coutLock.lock();
+        std::cout << "t" << thread_id << " - ";
+        std::cout << "inserted key";
         if (print_key_stats) {
-          alex::coutLock.lock();
-          std::cout << "t" << thread_id << " - ";
-          std::cout << "inserted key : ";
+          std::cout << " which is : ";
           for (unsigned int j = 0; j < max_key_length; j++) {
-            std::cout << keys[std::get<1>(op_param)].key_arr_[j];
+            std::cout << keys[insertion_index].key_arr_[j];
           }
-          std::cout << std::endl;
-          alex::coutLock.unlock();
         }
+        std::cout << std::endl;
+        alex::coutLock.unlock();
+#endif
         insert_cnt++;
       }
     }
@@ -507,15 +550,20 @@ void *run_fg(void *param) {
 #endif
       auto read_result = table->get_payload_from_parent(key, std::get<3>(op_param), thread_id);
       if (!std::get<0>(read_result)) {
+#if DEBUG_PRINT
+        alex::coutLock.lock();
+        std::cout << "t" << thread_id << " - ";
+        std::cout << "read key";
         if (print_key_stats) {
-          alex::coutLock.lock();
-          std::cout << "t" << thread_id << " - ";
+          std::cout << " which is : ";
           for (unsigned int k = 0; k < max_key_length; k++) {
             std::cout << key.key_arr_[k];
           }
-          std::cout << " payload is : " << std::get<1>(read_result) << std::endl;
-          alex::coutLock.unlock();
+          std::cout << std::get<1>(read_result);
         }
+        std::cout << std::endl;
+        alex::coutLock.unlock();
+#endif
       }
       else {
         //NEED TO HANDLE READ FAILURE CASE
@@ -551,6 +599,54 @@ void *run_fg(void *param) {
   std::cout << "worker id : " << thread_id
             << " finished" << std::endl;
   alex::coutLock.unlock();
+
+  pthread_exit(nullptr);
+}
+
+void *join_backgrounds(void *param __attribute__((unused))) {
+  std::unique_lock<std::mutex> lk(alex::cvm);
+  ready = true;
+  alex::cv.wait(lk, []{
+    return !(alex::join_pending_threads_.empty()) || (foreground_finished);
+  });
+
+  while (true) {
+#if DEBUG_PRINT
+    alex::coutLock.lock();
+    std::cout << "joiner : woke up to join thread" << std::endl;
+    alex::coutLock.unlock();
+#endif
+    while (!alex::join_pending_threads_.empty()) {
+      pthread_join(alex::join_pending_threads_.front(), nullptr);
+#if DEBUG_PRINT
+      alex::coutLock.lock();
+      std::cout << "joiner : joined thread with id : " << alex::join_pending_threads_.front() << std::endl;
+      alex::coutLock.unlock();
+#endif
+      alex::join_pending_threads_.pop();
+    }
+
+    if (foreground_finished == true && alex::cur_bg_num.load() == 0) {
+#if DEBUG_PRINT
+      alex::coutLock.lock();
+      std::cout << "joiner : finished joining threads and terminating\n";
+      alex::coutLock.unlock();
+#endif
+      break;
+    }
+    else {
+#if DEBUG_PRINT
+      alex::coutLock.lock();
+      std::cout << "joiner : sleeping again..." << std::endl;
+      alex::coutLock.unlock();
+#endif
+      alex::cv.wait(lk, []{
+        return !(alex::join_pending_threads_.empty()) || (foreground_finished == true && alex::cur_bg_num.load() == 0);
+      });
+    }
+  }
+
+  lk.unlock();
 
   pthread_exit(nullptr);
 }
