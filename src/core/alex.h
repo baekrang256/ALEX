@@ -104,6 +104,8 @@ class Alex {
   };
   DerivedParams derived_params_;
 
+  int expected_min_numkey_per_data_node_ = 1 << 13;
+
   /* Counters, useful for benchmarking and profiling */
   std::atomic<int> num_keys;
 
@@ -175,7 +177,7 @@ class Alex {
     // Set up root as empty data node
     auto empty_data_node = new (data_node_allocator().allocate(1))
         data_node_type(nullptr, key_less_, allocator_);
-    empty_data_node->bulk_load(nullptr, 0);
+    empty_data_node->bulk_load(nullptr, 0, expected_min_numkey_per_data_node_);
     root_node_ = empty_data_node;
     create_superroot();
   }
@@ -194,7 +196,7 @@ class Alex {
     // Set up root as empty data node
     auto empty_data_node = new (data_node_allocator().allocate(1))
         data_node_type(nullptr, key_less_, allocator_);
-    empty_data_node->bulk_load(nullptr, 0);
+    empty_data_node->bulk_load(nullptr, 0, expected_min_numkey_per_data_node_);
     root_node_ = empty_data_node;
     create_superroot();
   }
@@ -212,7 +214,7 @@ class Alex {
     // Set up root as empty data node
     auto empty_data_node = new (data_node_allocator().allocate(1))
         data_node_type(nullptr, key_less_, allocator_);
-    empty_data_node->bulk_load(nullptr, 0);
+    empty_data_node->bulk_load(nullptr, 0, expected_min_numkey_per_data_node_);
     root_node_ = empty_data_node;
     create_superroot();
   }
@@ -883,8 +885,8 @@ class Alex {
       auto data_node = new (data_node_allocator().allocate(1))
           data_node_type(node->level_, derived_params_.max_data_node_slots,
                          parent, key_less_, allocator_);
-      data_node->bulk_load(values, num_keys, data_node_model,
-                           params_.approximate_model_computation);
+      data_node->bulk_load(values, num_keys, expected_min_numkey_per_data_node_,
+                           data_node_model, params_.approximate_model_computation);
       data_node->cost_ = node->cost_;
       delete_node(node);
       node = data_node;
@@ -902,7 +904,7 @@ class Alex {
         derived_params_.max_data_node_slots * data_node_type::kInitDensity_);
     best_fanout_stats = fanout_tree::find_best_fanout_bottom_up<T, P>(
         values, num_keys, node, total_keys, used_fanout_tree_nodes,
-        derived_params_.max_fanout, max_data_node_keys,
+        derived_params_.max_fanout, max_data_node_keys, expected_min_numkey_per_data_node_,
         params_.expected_insert_frac, params_.approximate_model_computation,
         params_.approximate_cost_computation);
     int best_fanout_tree_depth = best_fanout_stats.first;
@@ -1091,8 +1093,8 @@ class Alex {
       auto data_node = new (data_node_allocator().allocate(1))
           data_node_type(node->level_, derived_params_.max_data_node_slots,
                          parent, key_less_, allocator_);
-      data_node->bulk_load(values, num_keys, data_node_model,
-                           params_.approximate_model_computation);
+      data_node->bulk_load(values, num_keys, expected_min_numkey_per_data_node_,
+                           data_node_model, params_.approximate_model_computation);
       data_node->cost_ = node->cost_;
       delete_node(node);
       node = data_node;
@@ -1121,7 +1123,7 @@ class Alex {
     LinearModel<T> precomputed_model(tree_node->a, tree_node->b);
     node->bulk_load_from_existing(leaf_keys, leaf_payloads,
                                   left, right, worker_id, &precomputed_model,
-                                  tree_node->num_keys);
+                                  tree_node->num_keys, this_ptr->expected_min_numkey_per_data_node_);
 
     node->max_slots_ = this_ptr->derived_params_.max_data_node_slots;
     if (compute_cost) {
@@ -1594,6 +1596,26 @@ public:
       pthread_mutex_unlock(&leaf->insert_mutex_);
       memory_fence();
       rcu_progress(worker_id);
+#if PROFILE
+      auto insert_from_parent_end_time = std::chrono::high_resolution_clock::now();
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_from_parent_end_time - insert_from_parent_start_time).count();
+      if (last_parent == superroot_) {
+        profileStats.insert_from_superroot_fail_time[worker_id] += elapsed_time;
+        profileStats.insert_superroot_fail_cnt[worker_id]++;
+        profileStats.max_insert_from_superroot_fail_time[worker_id] =
+          std::max(profileStats.max_insert_from_superroot_fail_time[worker_id], elapsed_time);
+        profileStats.min_insert_from_superroot_fail_time[worker_id] =
+          std::min(profileStats.min_insert_from_superroot_fail_time[worker_id], elapsed_time);
+      }
+      else {
+        profileStats.insert_from_parent_fail_time[worker_id] += elapsed_time;
+        profileStats.insert_directp_fail_cnt[worker_id]++;
+        profileStats.max_insert_from_parent_fail_time[worker_id] =
+          std::max(profileStats.max_insert_from_parent_fail_time[worker_id], elapsed_time);
+        profileStats.min_insert_from_parent_fail_time[worker_id] =
+          std::min(profileStats.min_insert_from_parent_fail_time[worker_id], elapsed_time);
+      }
+#endif
       return {Iterator(nullptr, 1), false, parent};
     }
     else if (!fail) {//succeded without modification
@@ -1645,7 +1667,7 @@ public:
                     << "with bucketID " << traversal_path.back().bucketID << " and parent " << leaf->parent_ << std::endl;
           coutLock.unlock();
   #endif
-          leaf->generate_new_delta_idx(worker_id);
+          leaf->generate_new_delta_idx(expected_min_numkey_per_data_node_, worker_id);
           pthread_create(&pthread, nullptr, expand_handler, (void *)param);
         }
         pthread_mutex_unlock(&leaf->insert_mutex_);
@@ -1668,7 +1690,7 @@ public:
                       << "with bucketID " << traversal_path.back().bucketID << " and parent " << leaf->parent_ << std::endl;
             coutLock.unlock();
   #endif
-          leaf->generate_new_delta_idx(worker_id);
+          leaf->generate_new_delta_idx(expected_min_numkey_per_data_node_, worker_id);
           pthread_create(&pthread, nullptr, insert_fail_handler, (void *)param);
         }   
         pthread_mutex_unlock(&leaf->insert_mutex_);

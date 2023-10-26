@@ -1161,10 +1161,13 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   /*** Bulk loading and model building ***/
 
   // Initalize key/payload/bitmap arrays and relevant metadata
-  void initialize(int num_keys, double density) {
+  void initialize(int num_keys, double density, int expected_min_numkey_per_data_node) {
     num_keys_ = num_keys;
     data_capacity_ =
-        std::max(static_cast<int>(num_keys / density), num_keys + 1);
+        std::max(
+          std::max(static_cast<int>(num_keys / density), num_keys + 1),
+          expected_min_numkey_per_data_node
+        );
     bitmap_size_ = static_cast<size_t>(std::ceil(data_capacity_ / 64.));
     bitmap_ = new (bitmap_allocator().allocate(bitmap_size_))
         uint64_t[bitmap_size_]();  // initialize to all false
@@ -1176,11 +1179,11 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // Assumes pretrained_model is trained on dense array of keys
   // I also assumed that all DataNodes have properly initialized key length limit. (max_key_length_)
   // second condition must be handled when creating data node.
-  void bulk_load(const V values[], int num_keys,
+  void bulk_load(const V values[], int num_keys, int expected_min_numkey_per_data_node,
                  const LinearModel<T>* pretrained_model = nullptr,
                  bool train_with_sample = false) {
     /* minimal condition checking. */
-    initialize(num_keys, kInitDensity_);
+    initialize(num_keys, kInitDensity_, expected_min_numkey_per_data_node);
 
     if (num_keys == 0) {
       expansion_threshold_ = data_capacity_;
@@ -1271,24 +1274,9 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // If the linear model and num_actual_keys have been precomputed, we can avoid
   // redundant work
   void bulk_load_from_existing(
-      AlexKey<T>** leaf_keys, P* leaf_payloads,
-      int left, int right, uint32_t worker_id,
-      const LinearModel<T>* precomputed_model,
-      int precomputed_num_actual_keys) {
-#if DEBUG_PRINT
-    if (left < 0) {
-      alex::coutLock.lock();
-      std::cout << "t" << worker_id << " - ";
-      std::cout <<"fucked left" << std::endl;
-      alex::coutLock.unlock();
-    }
-    if (right > node->data_capacity_) {
-      alex::coutLock.lock();
-      std::cout << "t" << worker_id << " - ";
-      std::cout << "fucked right" << std::endl;
-      alex::coutLock.unlock();
-    }
-#endif
+      AlexKey<T>** leaf_keys, P* leaf_payloads, int left, int right, 
+      uint32_t worker_id, const LinearModel<T>* precomputed_model,
+      int precomputed_num_actual_keys,int expected_min_numkey_per_data_node) {
     //assert(left >= 0 && right <= node->data_capacity_);
 
     // Build model
@@ -1298,7 +1286,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     }
     this->model_.b_ = precomputed_model->b_;
 
-    initialize(num_actual_keys, kMinDensity_);
+    initialize(num_actual_keys, kMinDensity_, expected_min_numkey_per_data_node);
     if (num_actual_keys == 0) {
       expansion_threshold_ = data_capacity_;
       contraction_threshold_ = 0;
@@ -1776,9 +1764,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 
   //make temporal delta index for insert to use
   //while data node is being modified.
-  void generate_new_delta_idx(uint32_t worker_id) {
+  void generate_new_delta_idx(int expected_min_numkey_per_data_node, uint32_t worker_id) {
     //make new delta index first.
-    int new_delta_idx_capacity = std::max(num_keys_ + delta_num_keys_, 1024); //guess it's okay for 1024?
+    int new_delta_idx_capacity = std::max((num_keys_ + delta_num_keys_),
+                                          expected_min_numkey_per_data_node); //guess it's okay for 1024?
     auto new_delta_bitmap_size = static_cast<size_t>(std::ceil(new_delta_idx_capacity / 64.));
     auto new_delta_bitmap = new (bitmap_allocator().allocate(new_delta_bitmap_size))
         uint64_t[new_delta_bitmap_size]();
@@ -2105,7 +2094,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         std::cout << "alex_nodes.h insert : failed inserting to delta_index_ because it's full" << std::endl;
         alex::coutLock.unlock();
 #endif
-        return {{5, -1}, {this, nullptr}};
+        return {{5, 0}, {this, nullptr}};
       }
       delta_num_keys_++;
     }
@@ -2117,7 +2106,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         std::cout << "alex_nodes.h insert : failed inserting to tmp_delta_index_ because it's full" << std::endl;
         alex::coutLock.unlock();
 #endif
-        return {{5, -1}, {this, nullptr}};
+        return {{5, 0}, {this, nullptr}};
       }
       tmp_delta_num_keys_++;
     }

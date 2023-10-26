@@ -293,8 +293,8 @@ template <class T, class P>
 std::pair<int, double> find_best_fanout_bottom_up(
     const std::pair<AlexKey<T>, P> values[], int num_keys, const AlexNode<T, P>* node,
     int total_keys, std::vector<FTNode>& used_fanout_tree_nodes, int max_fanout,
-    int max_data_node_keys, double expected_insert_frac = 0,
-    bool approximate_model_computation = true,
+    int max_data_node_keys, int expected_min_numkey_per_data_node,
+    double expected_insert_frac = 0, bool approximate_model_computation = true,
     bool approximate_cost_computation = false) {
   // Repeatedly add levels to the fanout tree until the overall cost of each
   // level starts to increase
@@ -317,7 +317,8 @@ std::pair<int, double> find_best_fanout_bottom_up(
   }
   basic_model_builder.build();
 
-  for (int fanout = 2, fanout_tree_level = 1; fanout <= max_fanout;
+  for (int fanout = 2, fanout_tree_level = 1; 
+       (fanout <= max_fanout) && (num_keys / fanout > expected_min_numkey_per_data_node);
        fanout *= 2, fanout_tree_level++) {
     std::vector<FTNode> new_level;
     double cost = compute_level<T, P>(
