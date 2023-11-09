@@ -47,6 +47,7 @@ uint64_t max_key_length = 1;
 bool print_key_stats = false;
 bool strict_read = false;
 bool strict_insert = false;
+bool only_check_structure = false;
 uint64_t total_num_keys = 1;
 uint32_t fg_num = 1;
 uint32_t bg_num = 10;
@@ -73,6 +74,7 @@ uint64_t num_actual_inserts_perth;
  * --strict_read            abort when failed finding payload
  * --strict_insert          abort when failed finding leaf node to insert key
  * --bg_thread_num          maximum number of background threads. Default is 10.
+ * --only_check_structure   used for only checking structure after bulk load
  */
 int main(int argc, char* argv[]) {
   auto flags = parse_flags(argc, argv);
@@ -92,6 +94,7 @@ int main(int argc, char* argv[]) {
   print_key_stats = get_boolean_flag(flags, "print_key_stats");
   strict_read = get_boolean_flag(flags, "strict_read");
   strict_insert = get_boolean_flag(flags, "strict_insert");
+  only_check_structure = get_boolean_flag(flags, "only_check_structure");
 
   alex::max_key_length_ = max_key_length;
 
@@ -151,6 +154,12 @@ int main(int argc, char* argv[]) {
   auto bulkload_end_time = std::chrono::high_resolution_clock::now();
   std::cout << "It took " << std::chrono::duration_cast<std::chrono::nanoseconds>(bulkload_end_time -
             bulkload_start_time).count() << "ns" << std::endl;
+
+  if (only_check_structure) {
+    delete[] values;
+    delete[] keys;
+    return 0;
+  }
 
   //workload setup
   inserted_range = init_num_keys-2;
