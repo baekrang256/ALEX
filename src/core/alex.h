@@ -104,7 +104,7 @@ class Alex {
   };
   DerivedParams derived_params_;
 
-  int expected_min_numkey_per_data_node_ = 1 << 13;
+  int expected_min_numkey_per_data_node_ = 1;
 
   /* Counters, useful for benchmarking and profiling */
   std::atomic<int> num_keys;
@@ -1293,26 +1293,25 @@ public:
 
     //failed finding in key_array. Try finding in delta index if it exists
     pthread_rwlock_unlock(&(leaf->key_array_rw_lock_));
-    if (!pthread_rwlock_tryrdlock(&(leaf->delta_index_rw_lock_))) { //succeded obtaining lock
-      if (leaf->delta_idx_ == nullptr) { //but delta index doesn't exist. failed
-        pthread_rwlock_unlock(&(leaf->delta_index_rw_lock_));
-        auto parent = leaf->parent_;
-        rcu_progress(worker_id);
-  #if PROFILE
-        update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
-  #endif
-        return {1, 0, parent};
-      }
-    } else { //failed obtaining lock
+    if (leaf->delta_idx_ == nullptr) { //delta index doesn't exist
       auto parent = leaf->parent_;
       rcu_progress(worker_id);
-#if PROFILE
+  #if PROFILE
       update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
-
-#endif
+  #endif
+      return {1, 0, parent};
+    }
+    else if (pthread_rwlock_tryrdlock(&(leaf->delta_index_rw_lock_))) { //failed obtaining lock
+      pthread_rwlock_unlock(&(leaf->delta_index_rw_lock_));
+      auto parent = leaf->parent_;
+      rcu_progress(worker_id);
+  #if PROFILE
+      update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
+  #endif
       return {1, 0, parent};
     }
 
+    //succeeded, so try finding key
     idx = leaf->find_key(key, worker_id, DELTA_IDX);
 
     if (idx >= 0) { //successful
@@ -1327,23 +1326,21 @@ public:
 
     //failed finding in key_array. Try finding in delta index if it exists
     pthread_rwlock_unlock(&(leaf->delta_index_rw_lock_));
-    if (!pthread_rwlock_tryrdlock(&(leaf->tmp_delta_index_rw_lock_))) { //succeded obtaining lock
-      if (leaf->tmp_delta_idx_ == nullptr) {//but tmp_delta_idx_ doesn't exist. failed
-        pthread_rwlock_unlock(&(leaf->tmp_delta_index_rw_lock_));
-        auto parent = leaf->parent_;
-        rcu_progress(worker_id);
-  #if PROFILE
-        update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
-  #endif
-        return {1, 0, parent};
-      }
-    }
-    else { //failed obtaining lock
+    if (leaf->tmp_delta_idx_ == nullptr) {//but tmp_delta_idx_ doesn't exist. failed
       auto parent = leaf->parent_;
       rcu_progress(worker_id);
-#if PROFILE
+  #if PROFILE
       update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
-#endif
+  #endif
+      return {1, 0, parent};
+    }
+    if (pthread_rwlock_tryrdlock(&(leaf->tmp_delta_index_rw_lock_))) {//failed obtaining lock
+      pthread_rwlock_unlock(&(leaf->tmp_delta_index_rw_lock_));
+      auto parent = leaf->parent_;
+      rcu_progress(worker_id);
+  #if PROFILE
+      update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
+  #endif
       return {1, 0, parent};
     }
 
@@ -1553,7 +1550,7 @@ public:
     alex::coutLock.lock();
     std::cout << "t" << worker_id << " - in final, decided to insert at bucketID : "
               << traversal_path.back().bucketID << '\n';
-    std::cout << "it's node status is : " << leaf->node_status_.load() << std::endl;
+    std::cout << "it's node status is : " << leaf->node_status_ << std::endl;
     alex::coutLock.unlock();
 #endif
 
@@ -1593,6 +1590,7 @@ public:
       return {Iterator(leaf, insert_pos), false, nullptr};
     }
     else if (fail == 6) {
+      //delta/tmp_delta is full...
       pthread_mutex_unlock(&leaf->insert_mutex_);
       memory_fence();
       rcu_progress(worker_id);
@@ -1748,7 +1746,7 @@ public:
     std::cout << "t" << worker_id << " - failed and made a thread to resize" << '\n';
     std::cout << "id is : " << pthread_self() << '\n';
     std::cout << "parent is : " << leaf->parent_ << '\n';
-    std::cout << "leaf's node_status_ is : " << leaf->node_status_.load() << std::endl;
+    std::cout << "leaf's node_status_ is : " << leaf->node_status_ << std::endl;
     alex::coutLock.unlock();
 #endif
 
@@ -1791,7 +1789,7 @@ public:
     std::cout << "id is : " << pthread_self() << '\n';
     std::cout << "parent is : " << parent << '\n';
     std::cout << "bucketID : " << bucketID << '\n';
-    std::cout << "leaf's node_status_ is : " << leaf->node_status_.load() << std::endl;
+    std::cout << "leaf's node_status_ is : " << leaf->node_status_ << std::endl;
     //std::cout << "reason is : " << fail << std::endl;
     alex::coutLock.unlock();
 #endif
@@ -1806,7 +1804,7 @@ public:
     //we also make model for find_best_fanout_existing_node
     typedef typename AlexDataNode<T, P>::const_iterator_type node_iterator; 
     int total_num_keys;
-    int leaf_status = leaf->node_status_.load();
+    int leaf_status = leaf->node_status_;
     bool leaf_just_splitted = leaf->child_just_splitted_;
     if (leaf_just_splitted) {
       int leaf_delta_insert_keys_ = 0;
@@ -2367,7 +2365,7 @@ public:
 #endif
     data_node_type* prev_leaf =
         old_node->prev_leaf_.read();  // used for linking the new data nodes
-    int old_node_status = old_node->node_status_.load();
+    int old_node_status = old_node->node_status_;
     AlexKey<T>* old_node_activated_delta_idx;
     P* old_node_activated_delta_payload;
     uint64_t* old_node_activated_bitmap;

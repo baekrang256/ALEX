@@ -724,6 +724,9 @@ struct ProfileStats {
   fgStatType *insert_element_at_time,
              *max_insert_element_at_time,
              *min_insert_element_at_time;
+  fgStatType *find_insert_position_time,
+             *max_find_insert_position_time,
+             *min_find_insert_position_time;
   
 
   //fore background threads
@@ -773,6 +776,7 @@ struct ProfileStats {
   uint64_t *insert_using_shifts_call_cnt;
   uint64_t *insert_element_at_call_cnt;
   uint64_t *find_key_call_cnt;
+  uint64_t *find_insert_position_call_cnt;
 
   //for background threads
   std::atomic<uint64_t> resize_call_cnt;
@@ -836,6 +840,9 @@ struct ProfileStats {
     insert_element_at_time = new fgStatType[thread_num];
     max_insert_element_at_time = new fgStatType[thread_num];
     min_insert_element_at_time = new fgStatType[thread_num];
+    find_insert_position_time = new fgStatType[thread_num];
+    max_find_insert_position_time = new fgStatType[thread_num];
+    min_find_insert_position_time = new fgStatType[thread_num];
     get_payload_superroot_call_cnt = new uint64_t[thread_num];
     get_payload_directp_call_cnt = new uint64_t[thread_num];
     get_payload_superroot_success_cnt = new uint64_t[thread_num];
@@ -855,6 +862,7 @@ struct ProfileStats {
     insert_using_shifts_call_cnt = new uint64_t[thread_num];
     insert_element_at_call_cnt = new uint64_t[thread_num];
     find_key_call_cnt = new uint64_t[thread_num];
+    find_insert_position_call_cnt = new uint64_t[thread_num];
   }
 
   void profileReInit () {
@@ -911,6 +919,10 @@ struct ProfileStats {
       max_find_key_time[i] = std::numeric_limits<fgStatType>::min();
       min_find_key_time[i] = std::numeric_limits<fgStatType>::max();
 
+      find_insert_position_time[i] = 0;
+      max_find_insert_position_time[i] = std::numeric_limits<fgStatType>::min();
+      min_find_insert_position_time[i] = std::numeric_limits<fgStatType>::max();
+
       insert_using_shifts_time[i] = 0;
       max_insert_using_shifts_time[i] = std::numeric_limits<fgStatType>::min();
       min_insert_using_shifts_time[i] = std::numeric_limits<fgStatType>::max();
@@ -938,6 +950,7 @@ struct ProfileStats {
       insert_using_shifts_call_cnt[i] = 0;
       insert_element_at_call_cnt[i] = 0;
       find_key_call_cnt[i] = 0;
+      find_insert_position_call_cnt[i] = 0;
     }
 
     resize_time = 0;
@@ -1021,6 +1034,9 @@ struct ProfileStats {
     delete[] find_key_time;
     delete[] max_find_key_time;
     delete[] min_find_key_time;
+    delete[] find_insert_position_time;
+    delete[] max_find_insert_position_time;
+    delete[] min_find_insert_position_time;
     delete[] insert_using_shifts_time;
     delete[] max_insert_using_shifts_time;
     delete[] min_insert_using_shifts_time;
@@ -1046,6 +1062,7 @@ struct ProfileStats {
     delete[] insert_using_shifts_call_cnt;
     delete[] insert_element_at_call_cnt;
     delete[] find_key_call_cnt;
+    delete[] find_insert_position_call_cnt;
   }
 
   //prints max, min, average time + call count
@@ -1096,6 +1113,9 @@ struct ProfileStats {
     fgStatType insert_element_at_time_cumu = 0,
                max_insert_element_at_time_cumu = std::numeric_limits<fgStatType>::min(),
                min_insert_element_at_time_cumu = std::numeric_limits<fgStatType>::max();
+    fgStatType find_insert_position_time_cumu = 0,
+               max_find_insert_position_time_cumu = std::numeric_limits<fgStatType>::min(),
+               min_find_insert_position_time_cumu = std::numeric_limits<fgStatType>::max();
     
     uint64_t get_payload_superroot_call_cnt_total = 0;
     uint64_t get_payload_directp_call_cnt_total = 0;
@@ -1116,6 +1136,7 @@ struct ProfileStats {
     uint64_t insert_using_shifts_call_cnt_total = 0;
     uint64_t insert_element_at_call_cnt_total = 0;
     uint64_t find_key_call_cnt_total = 0;
+    uint64_t find_insert_position_call_cnt_total = 0;
 
     std::cout << "current batch's profile result is\n\n";
 
@@ -1196,6 +1217,11 @@ struct ProfileStats {
       max_insert_element_at_time_cumu = std::max(max_insert_element_at_time[i], max_insert_element_at_time_cumu);
       min_insert_element_at_time_cumu = std::min(min_insert_element_at_time[i], min_insert_element_at_time_cumu);
       
+      find_insert_position_time_cumu += find_insert_position_call_cnt[i] ?
+          find_insert_position_time[i] / find_insert_position_call_cnt[i] : 0;
+      max_find_insert_position_time_cumu = std::max(max_find_insert_position_time[i], max_find_insert_position_time_cumu);
+      min_find_insert_position_time_cumu = std::min(min_find_insert_position_time[i], min_find_insert_position_time_cumu);
+
       get_payload_superroot_call_cnt_total += get_payload_superroot_call_cnt[i];
       get_payload_directp_call_cnt_total += get_payload_directp_call_cnt[i];
       get_payload_superroot_success_cnt_total += get_payload_superroot_success_cnt[i];
@@ -1215,6 +1241,7 @@ struct ProfileStats {
       insert_using_shifts_call_cnt_total += insert_using_shifts_call_cnt[i];
       insert_element_at_call_cnt_total += insert_element_at_call_cnt[i];
       find_key_call_cnt_total += find_key_call_cnt[i];
+      find_insert_position_call_cnt_total += find_insert_position_call_cnt[i];
 
       //print
       std::cout << "-thread " << i << " -\n\n";
@@ -1238,7 +1265,8 @@ struct ProfileStats {
               << "get_leaf_from_insert_directp_call_cnt : " << get_leaf_from_insert_directp_call_cnt[i] << '\n'
               << "insert_using_shifts_call_cnt : " << insert_using_shifts_call_cnt[i] << '\n'
               << "insert_element_at_call_cnt : " << insert_element_at_call_cnt[i] << '\n'
-              << "find_key_call_cnt : " << find_key_call_cnt[i] << "\n\n";
+              << "find_key_call_cnt : " << find_key_call_cnt[i] << '\n'
+              << "find_insert_position_call_cnt : " << find_insert_position_call_cnt[i] << "\n\n";
 
       std::cout << "-average time-\n"
                 << "get_payload_from_superroot_success_time : " << (get_payload_superroot_success_cnt[i] ? 
@@ -1269,7 +1297,9 @@ struct ProfileStats {
                 << "insert_using_shifts_time : " << (insert_using_shifts_call_cnt[i] ?
                     insert_using_shifts_time[i] / insert_using_shifts_call_cnt[i] : 0) << '\n'
                 << "insert_element_at_time : " << (insert_element_at_call_cnt[i] ? 
-                    insert_element_at_time[i] / insert_element_at_call_cnt[i] : 0) << "\n\n";
+                    insert_element_at_time[i] / insert_element_at_call_cnt[i] : 0) << '\n'
+                << "find_insert_position_time : " << (find_insert_position_call_cnt[i] ? 
+                    find_insert_position_time[i] / find_insert_position_call_cnt[i] : 0) << "\n\n";
 
       std::cout << "-max time-\n"
                 << "max_get_payload_from_superroot_success_time : " << max_get_payload_from_superroot_success_time[i] << '\n'
@@ -1286,7 +1316,8 @@ struct ProfileStats {
                 << "max_get_leaf_from_insert_directp_time : " << max_get_leaf_from_insert_directp_time[i] << '\n'
                 << "max_find_key_time : " << max_find_key_time[i] << '\n'
                 << "max_insert_using_shifts_time : " << max_insert_using_shifts_time[i] << '\n'
-                << "max_insert_element_at_time : " << max_insert_element_at_time[i] << "\n\n";
+                << "max_insert_element_at_time : " << max_insert_element_at_time[i] << '\n'
+                << "max_find_insert_position_time : " << max_find_insert_position_time[i] << "\n\n";
 
       std::cout << "-min time-\n"
                 << "min_get_payload_from_superroot_success_time : " << min_get_payload_from_superroot_success_time[i] << '\n'
@@ -1303,7 +1334,8 @@ struct ProfileStats {
                 << "min_get_leaf_from_insert_directp_time : " << min_get_leaf_from_insert_directp_time[i] << '\n'
                 << "min_find_key_time : " << min_find_key_time[i] << '\n'
                 << "min_insert_using_shifts_time : " << min_insert_using_shifts_time[i] << '\n'
-                << "min_insert_element_at_time : " << min_insert_element_at_time[i] << "\n\n";
+                << "min_insert_element_at_time : " << min_insert_element_at_time[i] << '\n'
+                << "min_find_insert_position_time : " << min_find_insert_position_time[i] << "\n\n";
     }
 
     std::cout << "-foreground total-\n\n";
@@ -1326,7 +1358,8 @@ struct ProfileStats {
               << "get_leaf_from_insert_directp_call_cnt_total : " << get_leaf_from_insert_directp_call_cnt_total << '\n'
               << "insert_using_shifts_call_cnt_total : " << insert_using_shifts_call_cnt_total << '\n'
               << "insert_element_at_call_cnt_total : " << insert_element_at_call_cnt_total << '\n'
-              << "find_key_call_cnt_total : " << find_key_call_cnt_total << "\n\n";
+              << "find_key_call_cnt_total : " << find_key_call_cnt_total << '\n'
+              << "find_insert_position_call_cnt_total : " << find_insert_position_call_cnt_total << "\n\n";
 
     std::cout << "-average time-\n"
               << "get_payload_from_superroot_success_time : " << get_payload_from_superroot_success_time_cumu / td_num << '\n'
@@ -1343,7 +1376,8 @@ struct ProfileStats {
               << "get_leaf_from_insert_directp_time : " << get_leaf_from_insert_directp_time_cumu / td_num  << '\n'
               << "find_key_time : " << find_key_time_cumu / td_num << '\n'
               << "insert_using_shifts_time : " << insert_using_shifts_time_cumu / td_num << '\n'
-              << "insert_element_at_time : " << insert_element_at_time_cumu / td_num  << "\n\n";
+              << "insert_element_at_time : " << insert_element_at_time_cumu / td_num  << '\n'
+              << "find_insert_position_time : " << find_insert_position_time_cumu / td_num << "\n\n";
 
 
     std::cout << "-max time-\n"
@@ -1361,7 +1395,8 @@ struct ProfileStats {
               << "max_get_leaf_from_insert_directp_time : " << max_get_leaf_from_insert_directp_time_cumu << '\n'
               << "max_find_key_time : " << max_find_key_time_cumu << '\n'
               << "max_insert_using_shifts_time : " << max_insert_using_shifts_time_cumu << '\n'
-              << "max_insert_element_at_time : " << max_insert_element_at_time_cumu << "\n\n";
+              << "max_insert_element_at_time : " << max_insert_element_at_time_cumu << '\n'
+              << "max_find_insert_position_time : " << max_find_insert_position_time_cumu << "\n\n";
 
 
     std::cout << "-min time-\n"
@@ -1379,7 +1414,8 @@ struct ProfileStats {
               << "min_get_leaf_from_insert_directp_time : " << min_get_leaf_from_insert_directp_time_cumu << '\n'
               << "min_find_key_time : " << min_find_key_time_cumu << '\n'
               << "min_insert_using_shifts_time : " << min_insert_using_shifts_time_cumu << '\n'
-              << "min_insert_element_at_time : " << min_insert_element_at_time_cumu << "\n\n";
+              << "min_insert_element_at_time : " << min_insert_element_at_time_cumu << '\n'
+              << "min_find_insert_position_time : " << min_find_insert_position_time_cumu << "\n\n";
 
 
     std::cout << "-background threads-\n\n";

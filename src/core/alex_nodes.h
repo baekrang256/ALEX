@@ -228,7 +228,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   pthread_rwlock_t delta_index_rw_lock_ = PTHREAD_RWLOCK_INITIALIZER;
   pthread_rwlock_t tmp_delta_index_rw_lock_ = PTHREAD_RWLOCK_INITIALIZER;
 
-  std::atomic<int> node_status_{INSERT_AT_DATA};
+  int node_status_ = INSERT_AT_DATA;
 
   int data_capacity_ = 0;  // size of key/data_slots array
   int delta_idx_capacity_ = 0; //size of delta index
@@ -1579,15 +1579,30 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // Second returned value is first valid position (i.e., upper_bound of key).
   // If there are duplicate keys, the insert position will be to the right of
   // all existing keys of the same value.
-  std::pair<int, int> find_insert_position(const AlexKey<T>& key) {
-    return find_insert_position(key, key_slots_, data_capacity_, KEY_ARR);
+  std::pair<int, int> find_insert_position(const AlexKey<T>& key, uint64_t worker_id) {
+    return find_insert_position(key, key_slots_, data_capacity_, KEY_ARR, worker_id);
   }
 
   std::pair<int, int> find_insert_position(const AlexKey<T>& key, AlexKey<T> *ref_arr, 
-                                           int ref_capacity, int node_status) {
+                                           int ref_capacity, int node_status, uint64_t worker_id) {
+#if PROFILE
+    profileStats.find_insert_position_call_cnt[worker_id]++;
+    auto find_insert_position_start_time = std::chrono::high_resolution_clock::now();
+#endif
     int predicted_pos = predict_position(key, node_status);
     // insert to the right of duplicate keys
     int pos = exponential_search_upper_bound(predicted_pos, key, ref_arr, ref_capacity);
+#if PROFILE
+    auto find_insert_position_end_time = std::chrono::high_resolution_clock::now();
+    auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(
+      find_insert_position_end_time - find_insert_position_start_time
+    ).count();
+    profileStats.find_insert_position_time[worker_id] += elapsed_time;
+    profileStats.max_find_insert_position_time[worker_id] = 
+      std::max(profileStats.max_find_insert_position_time[worker_id], elapsed_time);
+    profileStats.min_find_insert_position_time[worker_id] =
+      std::min(profileStats.min_find_insert_position_time[worker_id], elapsed_time);
+#endif
     if (predicted_pos <= pos || check_exists(pos, node_status)) {
       return {pos, pos};
     } else {
@@ -1766,8 +1781,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   //while data node is being modified.
   void generate_new_delta_idx(int expected_min_numkey_per_data_node, uint32_t worker_id) {
     //make new delta index first.
-    int new_delta_idx_capacity = std::max((num_keys_ + delta_num_keys_),
-                                          expected_min_numkey_per_data_node); //guess it's okay for 1024?
+    int new_delta_idx_capacity = std::min((num_keys_ + delta_num_keys_), 1024); //guess it's okay for 1024?
     auto new_delta_bitmap_size = static_cast<size_t>(std::ceil(new_delta_idx_capacity / 64.));
     auto new_delta_bitmap = new (bitmap_allocator().allocate(new_delta_bitmap_size))
         uint64_t[new_delta_bitmap_size]();
@@ -1851,6 +1865,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     std::cout << "t" << worker_id << "'s generated thread - updating delta / tmp delta index" << std::endl;
     coutLock.unlock();
 #endif
+    pthread_mutex_lock(&insert_mutex_);
     if (node_status_ == INSERT_AT_DELTA) {
       //leave it as it is. Just change the mode.
 #if DEBUG_PRINT
@@ -1859,16 +1874,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       coutLock.unlock();
 #endif
       node_status_ = INSERT_AT_DATA;
+      pthread_mutex_unlock(&insert_mutex_);
     }
     else {
       //need to move tmp_delta_idx_ to delta_idx_.
-
-      //don't allow update while moving
-      //it could have not-synchronized metadata.
-      pthread_mutex_lock(&insert_mutex_);
-      memory_fence();
-      memory_fence();
-
       //don't read from delta index while moving
       //it could use wrong metadata to iterate through delta index
       pthread_rwlock_wrlock(&delta_index_rw_lock_);
@@ -1995,12 +2004,11 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     //std::cout << "alex_nodes.h - expected_avg_shifts_ : " << expected_avg_shifts_ << std::endl;
     //alex::coutLock.unlock();
 #endif
-    int cur_node_status = node_status_.load();
-    if (cur_node_status == INSERT_AT_DATA) {
+    if (node_status_ == INSERT_AT_DATA) {
       return insert_at_data(key, payload, worker_id);
     }
     else {
-      return insert_at_delta(key, payload, worker_id, cur_node_status);
+      return insert_at_delta(key, payload, worker_id, node_status_);
     }
   }
 
@@ -2015,7 +2023,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     alex::coutLock.unlock();
 #endif
     int insertion_position = -1;
-    std::pair<int, int> positions = find_insert_position(key);
+    std::pair<int, int> positions = find_insert_position(key, worker_id);
     int upper_bound_pos = positions.second;
     if (!allow_duplicates && upper_bound_pos > 0 &&
         key_equal(ALEX_DATA_NODE_KEY_AT(upper_bound_pos - 1), key)) {
@@ -2094,7 +2102,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         std::cout << "alex_nodes.h insert : failed inserting to delta_index_ because it's full" << std::endl;
         alex::coutLock.unlock();
 #endif
-        return {{5, 0}, {this, nullptr}};
+        return {{6, 0}, {this, nullptr}};
       }
       delta_num_keys_++;
     }
@@ -2106,11 +2114,11 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         std::cout << "alex_nodes.h insert : failed inserting to tmp_delta_index_ because it's full" << std::endl;
         alex::coutLock.unlock();
 #endif
-        return {{5, 0}, {this, nullptr}};
+        return {{6, 0}, {this, nullptr}};
       }
       tmp_delta_num_keys_++;
     }
-    std::pair<int, int> positions = find_insert_position(key, ref_arr, ref_capacity, node_status);
+    std::pair<int, int> positions = find_insert_position(key, ref_arr, ref_capacity, node_status, worker_id);
     int upper_bound_pos = positions.second;
     if (!allow_duplicates && upper_bound_pos > 0 &&
         key_equal(ref_arr[upper_bound_pos - 1], key)) {
@@ -2228,7 +2236,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       }
     }
     else {
-      last_delta_num_keys = node_status_.load() == INSERT_AT_DELTA ? 0 : delta_num_keys_;
+      last_delta_num_keys = node_status_ == INSERT_AT_DELTA ? 0 : delta_num_keys_;
     }
 
     int total_num_keys = last_delta_num_keys + num_keys_;
@@ -2269,13 +2277,13 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     else {delta_start_idx = 0;}
 
     const_iterator_type it(this, 0);
-    if (node_status_.load() == INSERT_AT_DELTA) {
+    if (node_status_ == INSERT_AT_DELTA) {
       const_iterator_type delta_it(this);
       delta_it.cur_idx_ = -1;
       resize_insert(new_payload_slots, new_bitmap, new_key_slots, new_model,
                     keys_remaining, new_data_capacity, it, delta_it);
     }
-    else if (node_status_.load() == INSERT_AT_TMPDELTA) {
+    else if (node_status_ == INSERT_AT_TMPDELTA) {
       const_iterator_type delta_it(this, delta_start_idx, true);
       resize_insert(new_payload_slots, new_bitmap, new_key_slots, new_model,
                     keys_remaining, new_data_capacity, it, delta_it);
