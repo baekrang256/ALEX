@@ -78,7 +78,7 @@ typedef unsigned __int32 uint32_t;
 #define DEBUG_PRINT 0
 
 /*** profile ***/
-#define PROFILE 0
+#define PROFILE 1
 
 /*** some utils for multithreading ***/
 #define likely(x) __builtin_expect(!!(x), 1)
@@ -1560,7 +1560,6 @@ struct AtomicVal {
       memory_fence();
       val_t curr_val = this->val_;
       memory_fence();
-
       uint64_t current_status = this->status;
       memory_fence();
 

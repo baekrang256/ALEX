@@ -1799,23 +1799,15 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       pthread_rwlock_wrlock(&delta_index_rw_lock_); //prevent reading in delta index before preparation
       memory_fence();
       delta_num_keys_ = 0;
-      memory_fence();
       delta_idx_capacity_ = new_delta_idx_capacity;
-      memory_fence();
       delta_idx_model_ = this->model_;
-      memory_fence();
       delta_bitmap_ = new_delta_bitmap;
-      memory_fence();
       delta_bitmap_size_ = new_delta_bitmap_size;
-      memory_fence();
       delta_idx_payloads_ = new_delta_idx_payloads;
-      memory_fence();
       delta_idx_ = new_delta_idx;
-      memory_fence();
       for (int i = 0; i < delta_idx_capacity_; ++i) {
         delta_idx_[i] = kEndSentinel_;
       }
-      memory_fence();
       node_status_ = INSERT_AT_DELTA;
       memory_fence();
       pthread_rwlock_unlock(&delta_index_rw_lock_);
@@ -1829,23 +1821,15 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       pthread_rwlock_wrlock(&tmp_delta_index_rw_lock_); //prevent reading in temporary delta index before preparation
       memory_fence();
       tmp_delta_num_keys_ = 0;
-      memory_fence();
       tmp_delta_idx_capacity_ = new_delta_idx_capacity;
-      memory_fence();
       tmp_delta_idx_model_ = this->model_;
-      memory_fence();
       tmp_delta_bitmap_ = new_delta_bitmap;
-      memory_fence();
       tmp_delta_bitmap_size_ = new_delta_bitmap_size;
-      memory_fence();
       tmp_delta_idx_payloads_ = new_delta_idx_payloads;
-      memory_fence();
       tmp_delta_idx_ = new_delta_idx;
-      memory_fence();
       for (int i = 0; i < tmp_delta_idx_capacity_; ++i) {
         tmp_delta_idx_[i] = kEndSentinel_;
       }
-      memory_fence();
       node_status_ = INSERT_AT_TMPDELTA;
       memory_fence();
       pthread_rwlock_unlock(&tmp_delta_index_rw_lock_);
@@ -1881,38 +1865,25 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       //don't read from delta index while moving
       //it could use wrong metadata to iterate through delta index
       pthread_rwlock_wrlock(&delta_index_rw_lock_);
-      memory_fence();
-      memory_fence();
 
       //don't read from temporary delta index while moving
       //it could use wrong metadata to iterate through temporary delta index
       pthread_rwlock_wrlock(&tmp_delta_index_rw_lock_);
       memory_fence();
-      memory_fence();
 
       //temporary saving
       auto old_delta_idx_ = delta_idx_;
-      memory_fence();
       auto old_delta_bitmap_ = delta_bitmap_;
-      memory_fence();
       auto old_delta_payloads_ = delta_idx_payloads_;
-      memory_fence();
 
       //copying
       delta_idx_ = tmp_delta_idx_;
-      memory_fence();
       delta_bitmap_ = tmp_delta_bitmap_;
-      memory_fence();
       delta_idx_payloads_ = tmp_delta_idx_payloads_;
-      memory_fence();
       delta_idx_capacity_ = tmp_delta_idx_capacity_;
-      memory_fence();
       delta_num_keys_ = tmp_delta_num_keys_;
-      memory_fence();
       delta_bitmap_size_ = tmp_delta_bitmap_size_;
-      memory_fence();
       delta_idx_model_ = tmp_delta_idx_model_;
-      memory_fence();
 
       //cleaning
       tmp_delta_idx_ = nullptr;
@@ -1920,15 +1891,11 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       tmp_delta_idx_payloads_ = nullptr;
       tmp_delta_bitmap_size_ = 0;
       tmp_delta_idx_capacity_ = 0;
-      memory_fence();
-      pthread_rwlock_unlock(&tmp_delta_index_rw_lock_);
-      memory_fence();
-      pthread_rwlock_unlock(&delta_index_rw_lock_);
-      memory_fence();
       node_status_ = INSERT_AT_DATA;
       memory_fence();
+      pthread_rwlock_unlock(&tmp_delta_index_rw_lock_);
+      pthread_rwlock_unlock(&delta_index_rw_lock_);
       pthread_mutex_unlock(&insert_mutex_);
-      memory_fence();
 
       if (child_just_splitted_) {//if it's sharing delta index
 #if DEBUG_PRINT
