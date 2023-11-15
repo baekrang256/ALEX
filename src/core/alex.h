@@ -408,7 +408,7 @@ class Alex {
  public:
 #if ALEX_SAFE_LOOKUP
   forceinline data_node_type* get_leaf(
-    AlexKey<T> key, const uint32_t worker_id,
+    AlexKey<T> key, const uint64_t worker_id,
     int mode = 1, std::vector<TraversalNode<T, P>>* traversal_path = nullptr) {
 #if DEBUG_PRINT
       alex::coutLock.lock();
@@ -429,7 +429,7 @@ class Alex {
 // Mode 1 : It's for inserting new key. It checks boundaries, but could extend it.
 #if ALEX_SAFE_LOOKUP
   forceinline data_node_type* get_leaf_from_parent(
-      AlexKey<T> key, const uint32_t worker_id, node_type *starting_parent,
+      AlexKey<T> key, const uint64_t worker_id, node_type *starting_parent,
       int mode = 1, std::vector<TraversalNode<T, P>>* traversal_path = nullptr) {
 #if PROFILE
     auto get_leaf_from_parent_start_time = std::chrono::high_resolution_clock::now();
@@ -1113,7 +1113,7 @@ class Alex {
   // the returned data node
   static data_node_type* bulk_load_leaf_node_from_existing(
       const data_node_type* existing_node, AlexKey<T>** leaf_keys, P* leaf_payloads, 
-      int left, int right, uint32_t worker_id, self_type *this_ptr,
+      int left, int right, uint64_t worker_id, self_type *this_ptr,
       bool compute_cost = true, const fanout_tree::FTNode* tree_node = nullptr) {
     auto node = new (this_ptr->data_node_allocator().allocate(1))
         data_node_type(existing_node->parent_, this_ptr->key_less_, this_ptr->allocator_);
@@ -1464,18 +1464,18 @@ public:
   /*** Insert ***/
 
  public:
-  std::pair<Iterator, bool> insert(const V& value, uint32_t worker_id) {
+  std::pair<Iterator, bool> insert(const V& value, uint64_t worker_id) {
     return insert(value.first, value.second, worker_id);
   }
 
   template <class InputIterator>
-  void insert(InputIterator first, InputIterator last, uint32_t worker_id) {
+  void insert(InputIterator first, InputIterator last, uint64_t worker_id) {
     for (auto it = first; it != last; ++it) {
       insert(*it, worker_id);
     }
   }
 
-  std::tuple<Iterator, bool, model_node_type *> insert(const AlexKey<T>& key, const P& payload, uint32_t worker_id) {
+  std::tuple<Iterator, bool, model_node_type *> insert(const AlexKey<T>& key, const P& payload, uint64_t worker_id) {
     return insert_from_parent(key, payload, superroot_, worker_id);
   }
 
@@ -1489,7 +1489,7 @@ public:
   // If it failed finding a leaf, it returns iterator with null leaf with 0 index.
   // If we need to retry later, it returns iterator with null leaf with 1 index
   std::tuple<Iterator, bool, model_node_type *> insert_from_parent(const AlexKey<T>& key, const P& payload, 
-                                               model_node_type *last_parent, uint32_t worker_id) {
+                                               model_node_type *last_parent, uint64_t worker_id) {
     // in string ALEX, keys should not fall outside the key domain
 #if PROFILE
     if (last_parent == superroot_) {
@@ -1726,12 +1726,12 @@ public:
  private:
   struct expandParam {
     data_node_type *leaf;
-    uint32_t worker_id;
+    uint64_t worker_id;
   };
 
   struct alexIParam {
     data_node_type *leaf;
-    uint32_t worker_id;
+    uint64_t worker_id;
     int bucketID;
     self_type *this_ptr;
   };
@@ -1739,7 +1739,7 @@ public:
   static void *expand_handler(void *param) {
     expandParam *Eparam = (expandParam *)param;
     data_node_type *leaf = Eparam->leaf;
-    uint32_t worker_id = Eparam->worker_id;
+    uint64_t worker_id = Eparam->worker_id;
 
 #if DEBUG_PRINT
     alex::coutLock.lock();
@@ -1778,7 +1778,7 @@ public:
     //parameter obtaining
     alexIParam *Iparam = (alexIParam *) param;
     data_node_type *leaf = Iparam->leaf;
-    uint32_t worker_id = Iparam->worker_id;
+    uint64_t worker_id = Iparam->worker_id;
     int bucketID = Iparam->bucketID;
     self_type *this_ptr = Iparam->this_ptr;
 
@@ -2015,7 +2015,7 @@ public:
       model_node_type* parent, int bucketID, int fanout_tree_depth, double *model_param,
       std::vector<fanout_tree::FTNode>& used_fanout_tree_nodes,
       AlexKey<T>** leaf_keys, P* leaf_payloads, 
-      uint32_t worker_id, self_type *this_ptr) {
+      uint64_t worker_id, self_type *this_ptr) {
 #if PROFILE
     profileStats.split_downwards_call_cnt++;
     auto split_downwards_start_time = std::chrono::high_resolution_clock::now();
@@ -2125,7 +2125,7 @@ public:
                       int fanout_tree_depth,
                       std::vector<fanout_tree::FTNode>& used_fanout_tree_nodes,
                       AlexKey<T>** leaf_keys, P* leaf_payloads,
-                      uint32_t worker_id, self_type *this_ptr) {
+                      uint64_t worker_id, self_type *this_ptr) {
 #if PROFILE
     profileStats.split_sideways_call_cnt++;
     auto split_sideways_start_time = std::chrono::high_resolution_clock::now();
@@ -2174,7 +2174,7 @@ public:
                                           int mid_boundary, AlexKey<T>** leaf_keys, int start_bucketID, 
                                           AlexKey<T>* old_node_activated_delta_idx, 
                                           std::vector<std::pair<node_type *, int>> &generated_nodes,
-                                          uint32_t worker_id) {
+                                          uint64_t worker_id) {
     //We now stop inserting to delta index/tmp delta index of old node
     //Then we update new data node's delta index as old node's delta / tmp delta index
     //We than update 'already existing' model node's metadata.
@@ -2259,7 +2259,7 @@ public:
                                           int mid_boundary, AlexKey<T>** leaf_keys, int start_bucketID, 
                                           AlexKey<T>* old_node_activated_delta_idx, 
                                           std::vector<std::pair<node_type *, int>> &generated_nodes,
-                                          uint32_t worker_id) {
+                                          uint64_t worker_id) {
     //We 'first' updae 'new' model node's metadata. (parent)
     int cur = start_bucketID;
     for (auto it = generated_nodes.begin(); it != generated_nodes.end(); ++it) { //should be two
@@ -2345,7 +2345,7 @@ public:
  static void create_new_data_nodes(
       data_node_type* old_node, model_node_type* parent,
       int fanout_tree_depth, std::vector<fanout_tree::FTNode>& used_fanout_tree_nodes,
-      AlexKey<T>** leaf_keys, P* leaf_payloads, uint32_t worker_id, self_type *this_ptr, 
+      AlexKey<T>** leaf_keys, P* leaf_payloads, uint64_t worker_id, self_type *this_ptr, 
       int mode = 0, int start_bucketID = 0, int extra_duplication_factor = 0) {
 #if DEBUG_PRINT
     //alex::coutLock.lock();

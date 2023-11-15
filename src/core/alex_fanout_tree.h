@@ -374,7 +374,7 @@ std::pair<int, double *> find_best_fanout_existing_node(
                                    AlexDataNode<T, P>* node, AlexKey<T>** node_keys, 
                                    LinearModel<T> &tmp_model, int total_keys, int num_keys,
                                    std::vector<FTNode>& used_fanout_tree_nodes, int max_fanout,
-                                   uint32_t worker_id) {
+                                   uint64_t worker_id) {
   // Repeatedly add levels to the fanout tree until the overall cost of each
   // level starts to increase
 #if PROFILE

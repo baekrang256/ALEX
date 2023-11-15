@@ -1275,7 +1275,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // redundant work
   void bulk_load_from_existing(
       AlexKey<T>** leaf_keys, P* leaf_payloads, int left, int right, 
-      uint32_t worker_id, const LinearModel<T>* precomputed_model,
+      uint64_t worker_id, const LinearModel<T>* precomputed_model,
       int precomputed_num_actual_keys,int expected_min_numkey_per_data_node) {
     //assert(left >= 0 && right <= node->data_capacity_);
 
@@ -1506,7 +1506,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 
   // Searches for the last non-gap position equal to key
   // If no positions equal to key, returns -1
-  int find_key(const AlexKey<T>& key, uint32_t worker_id, int mode) {
+  int find_key(const AlexKey<T>& key, uint64_t worker_id, int mode) {
     //start searching when no write is running.
 #if PROFILE
     auto find_key_start_time = std::chrono::high_resolution_clock::now();
@@ -1779,7 +1779,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 
   //make temporal delta index for insert to use
   //while data node is being modified.
-  void generate_new_delta_idx(int expected_min_numkey_per_data_node, uint32_t worker_id) {
+  void generate_new_delta_idx(int expected_min_numkey_per_data_node, uint64_t worker_id) {
     //make new delta index first.
     int new_delta_idx_capacity = std::min((num_keys_ + delta_num_keys_), 1024); //guess it's okay for 1024?
     auto new_delta_bitmap_size = static_cast<size_t>(std::ceil(new_delta_idx_capacity / 64.));
@@ -1843,7 +1843,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 
   //updating delta index after resize of node
   //may need to check if we could do better, no contention synchronization.
-  void update_delta_idx_resize(uint32_t worker_id) {
+  void update_delta_idx_resize(uint64_t worker_id) {
 #if DEBUG_PRINT
     coutLock.lock();
     std::cout << "t" << worker_id << "'s generated thread - updating delta / tmp delta index" << std::endl;
@@ -1963,7 +1963,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   //
   // second pair has original data node pointer, and maybe new data node pointer
   std::pair<std::pair<int, int>, std::pair<self_type *, self_type *>> insert(
-    const AlexKey<T>& key, const P& payload, uint32_t worker_id) {
+    const AlexKey<T>& key, const P& payload, uint64_t worker_id) {
     // Periodically check for catastrophe
 #if DEBUG_PRINT
     //alex::coutLock.lock();
@@ -1982,7 +1982,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   //case of insertion in key_slots_
   //can return all kinds of pair shown above
   std::pair<std::pair<int, int>, std::pair<self_type *, self_type *>> insert_at_data(
-    const AlexKey<T>& key, const P& payload, uint32_t worker_id) {
+    const AlexKey<T>& key, const P& payload, uint64_t worker_id) {
 #if DEBUG_PRINT
     alex::coutLock.lock();
     std::cout << "t" << worker_id << " - ";
@@ -2036,7 +2036,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   //case of insertion in delta_idx_ / tmp_delta_idx_
   //should succeed, or fail because of full capacity
   std::pair<std::pair<int, int>, std::pair<self_type *, self_type *>> insert_at_delta(
-    const AlexKey<T>& key, const P& payload, uint32_t worker_id, int node_status) {
+    const AlexKey<T>& key, const P& payload, uint64_t worker_id, int node_status) {
 #if DEBUG_PRINT
     alex::coutLock.lock();
     std::cout << "t" << worker_id << " - ";
@@ -2299,7 +2299,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // mode 0 : rw_lock already obtained, no need for another write wait (for insert_using_shifts)
   // mode 1 : rw_lock not obtained, need to do write wait (for other use cases)
   void insert_element_at(const AlexKey<T>& key, P payload, int pos, 
-                         uint32_t worker_id, int mode = 0, int node_status = 0) {
+                         uint64_t worker_id, int mode = 0, int node_status = 0) {
 #if PROFILE
     auto insert_element_at_start_time = std::chrono::high_resolution_clock::now();
 #endif
@@ -2359,7 +2359,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // Insert key into pos, shifting as necessary in the range [left, right)
   // Returns the actual position of insertion
   int insert_using_shifts(const AlexKey<T>& key, P payload, int pos, 
-                          uint32_t worker_id, int node_status = 0) {
+                          uint64_t worker_id, int node_status = 0) {
     // Find the closest gap
 #if PROFILE
     profileStats.insert_using_shifts_call_cnt[worker_id]++;

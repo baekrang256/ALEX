@@ -78,7 +78,7 @@ typedef unsigned __int32 uint32_t;
 #define DEBUG_PRINT 0
 
 /*** profile ***/
-#define PROFILE 1
+#define PROFILE 0
 
 /*** some utils for multithreading ***/
 #define likely(x) __builtin_expect(!!(x), 1)
@@ -1704,7 +1704,7 @@ void rcu_alloc() {
   config_mutex.unlock();
 }
 
-void rcu_progress(const uint32_t worker_id) {
+void rcu_progress(const uint64_t worker_id) {
   config.rcu_status[worker_id].status++;
 }
 
@@ -1723,7 +1723,7 @@ void rcu_barrier() {
 }
 
 // wait for workers whose 'waiting' is false
-void rcu_barrier(const uint32_t worker_id) {
+void rcu_barrier(const uint64_t worker_id) {
   // set myself to waiting for barrier
 #if DEBUG_PRINT
   coutLock.lock();
