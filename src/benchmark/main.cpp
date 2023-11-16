@@ -23,18 +23,25 @@
 
 //parameter for thread
 struct FGParam;
+struct BGParam;
 typedef FGParam fg_param_t;
+typedef BGParam bg_param_t;
 void *run_fg(void *param);
-void *join_backgrounds(void *param);
+void *run_bg(void *param);
 
 struct FGParam {
   uint32_t thread_id;
 };
 
+struct BGParam {
+  uint32_t thread_id;
+  alex::Alex<KEY_TYPE, PAYLOAD_TYPE>* index;
+};
+
 //for multithreading synchronization
 std::atomic<bool> running(false);
-std::atomic<size_t> ready_threads(0);
-bool ready = false;
+std::atomic<size_t> ready_fg_threads(0);
+std::atomic<size_t> ready_bg_threads(0);
 bool foreground_finished = true;
 
 //common read-only data used for each threads
@@ -172,7 +179,6 @@ int main(int argc, char* argv[]) {
   double cumulative_time = 0.0;
   long long cumulative_operations = 0;
   alex::config.worker_n = fg_num;
-  alex::config.max_bgnum = bg_num;
   std::cout << std::scientific;
   std::cout << std::setprecision(3);
   alex::rcu_alloc();
@@ -180,23 +186,29 @@ int main(int argc, char* argv[]) {
   alex::profileStats.profileInit(fg_num);
 #endif
 
-  //prepare thread joining background threads
-  pthread_t background_join_thread;
+  //prepare background threads
+  pthread_t bg_threads[bg_num];
+  bg_param_t bg_params[bg_num];
   foreground_finished = false;
-  int ret = pthread_create(&background_join_thread, nullptr, join_backgrounds,nullptr);
-  if (ret) {
-    std::cout << "Error when making threads with code : " << ret << std::endl;
-    abort();
+  for (size_t worker_i = 0; worker_i < bg_num; worker_i++) {
+    bg_params[worker_i].thread_id = worker_i;
+    bg_params[worker_i].index = &index;
+    int ret = pthread_create(&bg_threads[worker_i], nullptr, run_bg, 
+                            (void *)&bg_params[worker_i]);
+    if (ret) {
+      std::cout << "Error when making background threads with code : " << ret << std::endl;
+      abort();
+    }
   }
   
   while (true) {
     alex::cvm.lock();
-    if (ready == true) {
+    if (ready_bg_threads >= bg_num) {
       alex::cvm.unlock();
       break;
     }
     alex::cvm.unlock();
-    sleep(0.1);
+    sleep(0.01);
   }
 
   //now workload starts
@@ -217,7 +229,7 @@ int main(int argc, char* argv[]) {
     pthread_t threads[fg_num];
     fg_param_t fg_params[fg_num];
     running = false;
-    ready_threads.store(0);
+    ready_fg_threads.store(0);
 
     num_actual_lookups_perth = num_lookups_per_batch / fg_num;
     num_actual_inserts_perth = std::min(num_inserts_per_batch / fg_num , (total_num_keys - inserted_range) / fg_num);
@@ -228,12 +240,12 @@ int main(int argc, char* argv[]) {
       int ret = pthread_create(&threads[worker_i], nullptr, run_fg,
                               (void *)&fg_params[worker_i]);
       if (ret) {
-        std::cout << "Error when making threads with code : " << ret << std::endl;
+        std::cout << "Error when making foreground threads with code : " << ret << std::endl;
         abort();
       }
     }
 
-    while(ready_threads < fg_num) {sleep(1);}
+    while(ready_fg_threads < fg_num) {sleep(0.01);}
     //alex::coutLock.lock();
     std::cout << "multithreading starts for batch : " << batch_no << std::endl;
     //alex::coutLock.unlock();
@@ -297,8 +309,16 @@ int main(int argc, char* argv[]) {
     std::lock_guard<std::mutex> lk(alex::cvm);
     foreground_finished = true;
   }
-  alex::cv.notify_one();
-  pthread_join(background_join_thread, nullptr);
+  alex::cv.notify_all();
+
+  void *status;
+  for (size_t i = 0; i < bg_num; i++) {
+    int bc = pthread_join(bg_threads[i], &status);
+    if (bc) {
+      std::cout << "Error : unable to join, " << bc << std::endl;
+      abort();
+    }
+  }
 
   std::cout << "finishing" << std::endl;
 
@@ -344,7 +364,7 @@ void *run_fg(void *param) {
   alex::coutLock.lock();
   std::cout << "worker " << thread_id << " ready to start" << std::endl;
   alex::coutLock.unlock();
-  ready_threads++;
+  ready_fg_threads++;
 
   //wait
   while (!running.load()) ;
@@ -447,7 +467,7 @@ void *run_fg(void *param) {
 #endif
       }
       else {
-        //NEED TO HANDLE READ FAILURE CASE
+        //read failure
         if (std::get<0>(read_result) == 1) {
 #if DEBUG_PRINT
           alex::coutLock.lock();
@@ -507,7 +527,7 @@ void *run_fg(void *param) {
             }
             alex::coutLock.unlock();
         }
-        else if (!std::get<0>(insert_result).cur_leaf_) {
+        else if (!std::get<0>(insert_result).cur_leaf_ && std::get<0>(insert_result).cur_idx_ == 1) {
           //failed because leaf is being modified/resizing.
 #if DEBUG_PRINT
           alex::coutLock.lock();
@@ -516,6 +536,16 @@ void *run_fg(void *param) {
           alex::coutLock.unlock();
 #endif
           pending_op.push_back(op_param);
+        }
+        else if (!std::get<0>(insert_result).cur_leaf_ && std::get<0>(insert_result).cur_idx_ == 2) {
+          //failed because delta index is full
+#if DEBUG_PRINT
+          alex::coutLock.lock();
+          std::cout << "worker id : " << thread_id
+                    << " failed because delta index is full. re-insertion post-poned" << std::endl;
+          alex::coutLock.unlock();
+#endif 
+          pending_op.push_back(op_param);         
         }
         else {
           //failed because duplicates are not allowed.
@@ -612,45 +642,54 @@ void *run_fg(void *param) {
   pthread_exit(nullptr);
 }
 
-void *join_backgrounds(void *param __attribute__((unused))) {
+void *run_bg(void *param) {
+  bg_param_t *bgparam = (bg_param_t *) param;
+  uint64_t thread_id = pthread_self();
+  alex::Alex<KEY_TYPE, PAYLOAD_TYPE>* index = (alex::Alex<KEY_TYPE, PAYLOAD_TYPE>*) bgparam->index;
   std::unique_lock<std::mutex> lk(alex::cvm);
-  ready = true;
+  ready_bg_threads++;
   alex::cv.wait(lk, []{
-    return !(alex::join_pending_threads_.empty()) || (foreground_finished);
+    return !(alex::pending_modification_jobs_.empty());
   });
 
   while (true) {
 #if DEBUG_PRINT
     alex::coutLock.lock();
-    std::cout << "joiner : woke up to join thread" << std::endl;
+    std::cout << "bg "<< thread_id << " woke up" << std::endl;
     alex::coutLock.unlock();
 #endif
-    while (!alex::join_pending_threads_.empty()) {
-      pthread_join(alex::join_pending_threads_.front(), nullptr);
+    while (!(alex::pending_modification_jobs_.empty())) {
+      auto pair = alex::pending_modification_jobs_.front();
+      alex::pending_modification_jobs_.pop();
+      lk.unlock();
+      if (pair.second) { //expansion
 #if DEBUG_PRINT
-      alex::coutLock.lock();
-      std::cout << "joiner : joined thread with id : " << alex::join_pending_threads_.front() << std::endl;
-      alex::coutLock.unlock();
+        alex::coutLock.lock();
+        std::cout << "bg "<< thread_id << " starting expansion" << std::endl;
+        alex::coutLock.unlock();
 #endif
-      alex::join_pending_threads_.pop();
+        index->expand_handler(pair.first);
+      }
+      else { //modification
+#if DEBUG_PRINT
+        alex::coutLock.lock();
+        std::cout << "bg "<< thread_id << " starting modification" << std::endl;
+        alex::coutLock.unlock();
+#endif
+        index->insert_fail_handler(pair.first);
+      }
+      lk.lock();
     }
 
-    if (foreground_finished == true && alex::cur_bg_num.load() == 0) {
-#if DEBUG_PRINT
-      alex::coutLock.lock();
-      std::cout << "joiner : finished joining threads and terminating\n";
-      alex::coutLock.unlock();
-#endif
-      break;
-    }
+    if (foreground_finished) {break;}
     else {
 #if DEBUG_PRINT
       alex::coutLock.lock();
-      std::cout << "joiner : sleeping again..." << std::endl;
+      std::cout << "bg "<< thread_id << " sleeping again..." << std::endl;
       alex::coutLock.unlock();
 #endif
       alex::cv.wait(lk, []{
-        return !(alex::join_pending_threads_.empty()) || (foreground_finished == true && alex::cur_bg_num.load() == 0);
+        return !(alex::pending_modification_jobs_.empty()) || (foreground_finished);
       });
     }
   }

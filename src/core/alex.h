@@ -1199,7 +1199,7 @@ class Alex {
   //obtain timing
 #if PROFILE
   void update_profileStats_get_payload_success(std::chrono::time_point<std::chrono::high_resolution_clock> start_time,
-                                            model_node_type *last_parent, int32_t worker_id){
+                                            model_node_type *last_parent, uint64_t worker_id){
     auto get_payload_from_parent_end_time = std::chrono::high_resolution_clock::now();
     auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(get_payload_from_parent_end_time - start_time).count();
     if (last_parent == superroot_) {
@@ -1221,7 +1221,7 @@ class Alex {
   }
 
   void update_profileStats_get_payload_fail(std::chrono::time_point<std::chrono::high_resolution_clock> start_time,
-                                            model_node_type *last_parent, int32_t worker_id){
+                                            model_node_type *last_parent, uint64_t worker_id){
     auto get_payload_from_parent_end_time = std::chrono::high_resolution_clock::now();
     auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(get_payload_from_parent_end_time - start_time).count();
     if (last_parent == superroot_) {
@@ -1246,7 +1246,7 @@ class Alex {
   // Returns whether payload search was successful, and the payload itself if it was successful.
   // This avoids the overhead of creating an iterator
 public:
-  std::tuple<int, P, model_node_type *> get_payload(const AlexKey<T>& key, int32_t worker_id) {
+  std::tuple<int, P, model_node_type *> get_payload(const AlexKey<T>& key, uint64_t worker_id) {
     return get_payload_from_parent(key, superroot_, worker_id);
   }
 
@@ -1254,7 +1254,7 @@ public:
   //0 on success.
   //1 if failed because write is writing
   //2 if failed because not foundable
-  std::tuple<int, P, model_node_type *> get_payload_from_parent(const AlexKey<T>& key, model_node_type *last_parent, int32_t worker_id) {
+  std::tuple<int, P, model_node_type *> get_payload_from_parent(const AlexKey<T>& key, model_node_type *last_parent, uint64_t worker_id) {
 #if PROFILE
     if (last_parent == superroot_) {
       profileStats.get_payload_superroot_call_cnt[worker_id]++;
@@ -1302,7 +1302,6 @@ public:
       return {1, 0, parent};
     }
     else if (pthread_rwlock_tryrdlock(&(leaf->delta_index_rw_lock_))) { //failed obtaining lock
-      pthread_rwlock_unlock(&(leaf->delta_index_rw_lock_));
       auto parent = leaf->parent_;
       rcu_progress(worker_id);
   #if PROFILE
@@ -1335,7 +1334,6 @@ public:
       return {1, 0, parent};
     }
     if (pthread_rwlock_tryrdlock(&(leaf->tmp_delta_index_rw_lock_))) {//failed obtaining lock
-      pthread_rwlock_unlock(&(leaf->tmp_delta_index_rw_lock_));
       auto parent = leaf->parent_;
       rcu_progress(worker_id);
   #if PROFILE
@@ -1590,7 +1588,7 @@ public:
       return {Iterator(leaf, insert_pos), false, nullptr};
     }
     else if (fail == 6) {
-      //delta/tmp_delta is full...
+      //delta/tmp_delta is full... try later.
       pthread_mutex_unlock(&leaf->insert_mutex_);
       memory_fence();
       rcu_progress(worker_id);
@@ -1614,7 +1612,7 @@ public:
           std::min(profileStats.min_insert_from_parent_fail_time[worker_id], elapsed_time);
       }
 #endif
-      return {Iterator(nullptr, 1), false, parent};
+      return {Iterator(nullptr, 2), false, parent};
     }
     else if (!fail) {//succeded without modification
 #if DEBUG_PRINT
@@ -1651,50 +1649,47 @@ public:
     }
     else { //succeeded, but needs to modify
       if (fail == 4) { //need to expand
-        if (cur_bg_num.load() < config.max_bgnum) {
-          cur_bg_num++;
-          memory_fence();
-          expandParam *param = new expandParam();
-          param->leaf = leaf;
-          param->worker_id = worker_id;
-          pthread_t pthread;
-          memory_fence();
+        expandParam *param = new expandParam();
+        param->leaf = leaf;
+        param->worker_id = worker_id;
+  #if DEBUG_PRINT
+        coutLock.lock();
+        std::cout << "t" << worker_id << " - generating new delta index for leaf " << leaf << '\n'
+                  << "with bucketID " << traversal_path.back().bucketID << " and parent " << leaf->parent_ << std::endl;
+        coutLock.unlock();
+  #endif
+        leaf->generate_new_delta_idx(expected_min_numkey_per_data_node_, worker_id);
+        {
+          std::lock_guard<std::mutex> lk(cvm);
+          std::pair<void *, int> job_pair = {param, 1};
+          pending_modification_jobs_.push(job_pair);
+        }
+        cv.notify_one();
+      }
+      else {
+        //create thread that handles modification and let it handle
+        alexIParam *param = new alexIParam();
+        param->leaf = leaf;
+        param->worker_id = worker_id;
+        param->bucketID = traversal_path.back().bucketID;
+        param->this_ptr = this;
   #if DEBUG_PRINT
           coutLock.lock();
           std::cout << "t" << worker_id << " - generating new delta index for leaf " << leaf << '\n'
                     << "with bucketID " << traversal_path.back().bucketID << " and parent " << leaf->parent_ << std::endl;
           coutLock.unlock();
   #endif
-          leaf->generate_new_delta_idx(expected_min_numkey_per_data_node_, worker_id);
-          pthread_create(&pthread, nullptr, expand_handler, (void *)param);
+        leaf->generate_new_delta_idx(expected_min_numkey_per_data_node_, worker_id);
+        {
+          std::lock_guard<std::mutex> lk(cvm);
+          std::pair<void *, int> job_pair = {param, 0};
+         pending_modification_jobs_.push(job_pair);
         }
-        pthread_mutex_unlock(&leaf->insert_mutex_);
-      }
-      else {
-        //create thread that handles modification and let it handle
-        if (fail == 5 || cur_bg_num.load() < config.max_bgnum) {
-          cur_bg_num++;
-          memory_fence();
-          alexIParam *param = new alexIParam();
-          param->leaf = leaf;
-          param->worker_id = worker_id;
-          param->bucketID = traversal_path.back().bucketID;
-          param->this_ptr = this;
-          pthread_t pthread;
-          memory_fence();
-  #if DEBUG_PRINT
-            coutLock.lock();
-            std::cout << "t" << worker_id << " - generating new delta index for leaf " << leaf << '\n'
-                      << "with bucketID " << traversal_path.back().bucketID << " and parent " << leaf->parent_ << std::endl;
-            coutLock.unlock();
-  #endif
-          leaf->generate_new_delta_idx(expected_min_numkey_per_data_node_, worker_id);
-          pthread_create(&pthread, nullptr, insert_fail_handler, (void *)param);
-        }   
-        pthread_mutex_unlock(&leaf->insert_mutex_);
+        cv.notify_one();
       }
 
       //original thread returns and retry later. (need to rcu_progress)
+      pthread_mutex_unlock(&leaf->insert_mutex_);
       rcu_progress(worker_id);
 
 #if PROFILE
@@ -1723,7 +1718,6 @@ public:
     }
   }
 
- private:
   struct expandParam {
     data_node_type *leaf;
     uint64_t worker_id;
@@ -1736,7 +1730,7 @@ public:
     self_type *this_ptr;
   };
 
-  static void *expand_handler(void *param) {
+  void expand_handler(void *param) {
     expandParam *Eparam = (expandParam *)param;
     data_node_type *leaf = Eparam->leaf;
     uint64_t worker_id = Eparam->worker_id;
@@ -1763,18 +1757,9 @@ public:
     //will use the original data node!
     delete Eparam;
     memory_fence();
-
-    //before exiting, notify that it exists
-    {
-      std::lock_guard<std::mutex> lk(cvm);
-      cur_bg_num--;
-      join_pending_threads_.push(pthread_self());
-    }
-    cv.notify_one();
-    pthread_exit(nullptr);
   }
 
-  static void *insert_fail_handler(void *param) {
+  void insert_fail_handler(void *param) {
     //parameter obtaining
     alexIParam *Iparam = (alexIParam *) param;
     data_node_type *leaf = Iparam->leaf;
@@ -1991,20 +1976,12 @@ public:
     delete[] leaf_payloads;
     memory_fence();
 
-    //before exiting, notify that it exists
-    {
-      std::lock_guard<std::mutex> lk(cvm);
-      cur_bg_num--;
-      join_pending_threads_.push(pthread_self());
-    }
-    cv.notify_one();
 #if DEBUG_PRINT
     coutLock.lock();
     std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
     std::cout << "finished modifying resize/split" << std::endl;
     coutLock.unlock();
 #endif
-    pthread_exit(nullptr);
   }
 
   // Splits downwards in the manner determined by the fanout tree and updates

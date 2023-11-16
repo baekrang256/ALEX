@@ -2397,7 +2397,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         ref_bitmap_size = bitmap_size_;
     }
     int gap_pos = closest_gap(pos, ref_capacity, ref_bitmap, ref_bitmap_size);
-    //std::cout << "gap pos is " << gap_pos << std::endl;
     set_bit(ref_bitmap, gap_pos);
     pthread_rwlock_wrlock(ref_rwlock); //for synchronization.
     if (gap_pos >= pos) {

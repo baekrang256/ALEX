@@ -1676,14 +1676,12 @@ struct IndexConfig {
   double buffer_size_tolerance = 3;
   size_t buffer_compact_threshold = 8;
   size_t worker_n = 0;
-  uint32_t max_bgnum = 10;
   std::unique_ptr<rcu_status_t[]> rcu_status;
   volatile bool exited = false;
 };
 
 index_config_t config;
 std::mutex config_mutex;
-std::atomic<uint32_t> cur_bg_num{0};
 
 // TODO replace it with user space RCU (e.g., qsbr)
 void rcu_init() {
@@ -1751,9 +1749,9 @@ void rcu_barrier(const uint64_t worker_id) {
 #endif
 }
 
-/* for joining background threads */
+/* for background threads */
 std::mutex cvm;
 std::condition_variable cv;
-std::queue<pthread_t> join_pending_threads_;
+std::queue<std::pair<void *, int>> pending_modification_jobs_;
 
 }
