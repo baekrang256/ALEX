@@ -469,9 +469,7 @@ class Alex {
       bucketID =
           std::min<int>(std::max<int>(bucketID, 0), num_children - 1);
       cur = cur_children[bucketID];
-      memory_fence();
       int cur_duplication_factor = 1 << cur->duplication_factor_;
-      memory_fence();
       bucketID = bucketID - (bucketID % cur_duplication_factor);
       AlexKey<T> *cur_pivot_key = &(cur->pivot_key_);
 #if DEBUG_PRINT
@@ -1563,7 +1561,6 @@ public:
     if (fail == -1) {
       // Duplicate found and duplicates not allowed
       pthread_mutex_unlock(&leaf->insert_mutex_);
-      memory_fence();
       rcu_progress(worker_id);
 #if PROFILE
       auto insert_from_parent_end_time = std::chrono::high_resolution_clock::now();
@@ -1590,7 +1587,6 @@ public:
     else if (fail == 6) {
       //delta/tmp_delta is full... try later.
       pthread_mutex_unlock(&leaf->insert_mutex_);
-      memory_fence();
       rcu_progress(worker_id);
 #if PROFILE
       auto insert_from_parent_end_time = std::chrono::high_resolution_clock::now();
@@ -1622,7 +1618,6 @@ public:
       alex::coutLock.unlock();
 #endif
       pthread_mutex_unlock(&leaf->insert_mutex_);
-      memory_fence();
       num_keys++;
       rcu_progress(worker_id);
 #if PROFILE
@@ -1756,7 +1751,6 @@ public:
 
     //will use the original data node!
     delete Eparam;
-    memory_fence();
   }
 
   void insert_fail_handler(void *param) {
@@ -1932,9 +1926,7 @@ public:
       leaf->expected_avg_exp_search_iterations_ =
           tree_node.expected_avg_search_iterations;
       leaf->expected_avg_shifts_ = tree_node.expected_avg_shifts;
-      memory_fence();
       leaf->update_delta_idx_resize(worker_id);
-      memory_fence();
     } else {
       // either split sideways or downwards
       // synchronization is covered automatically in splitting functions.
@@ -1974,7 +1966,6 @@ public:
     delete Iparam;
     delete[] leaf_keys;
     delete[] leaf_payloads;
-    memory_fence();
 
 #if DEBUG_PRINT
     coutLock.lock();

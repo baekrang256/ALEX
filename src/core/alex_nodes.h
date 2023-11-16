@@ -1797,7 +1797,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       coutLock.unlock();
 #endif
       pthread_rwlock_wrlock(&delta_index_rw_lock_); //prevent reading in delta index before preparation
-      memory_fence();
       delta_num_keys_ = 0;
       delta_idx_capacity_ = new_delta_idx_capacity;
       delta_idx_model_ = this->model_;
@@ -1809,7 +1808,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         delta_idx_[i] = kEndSentinel_;
       }
       node_status_ = INSERT_AT_DELTA;
-      memory_fence();
       pthread_rwlock_unlock(&delta_index_rw_lock_);
     }
     else {
@@ -1819,7 +1817,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       coutLock.unlock();
 #endif
       pthread_rwlock_wrlock(&tmp_delta_index_rw_lock_); //prevent reading in temporary delta index before preparation
-      memory_fence();
       tmp_delta_num_keys_ = 0;
       tmp_delta_idx_capacity_ = new_delta_idx_capacity;
       tmp_delta_idx_model_ = this->model_;
@@ -1831,7 +1828,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         tmp_delta_idx_[i] = kEndSentinel_;
       }
       node_status_ = INSERT_AT_TMPDELTA;
-      memory_fence();
       pthread_rwlock_unlock(&tmp_delta_index_rw_lock_);
     }
 #if DEBUG_PRINT
@@ -1869,7 +1865,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       //don't read from temporary delta index while moving
       //it could use wrong metadata to iterate through temporary delta index
       pthread_rwlock_wrlock(&tmp_delta_index_rw_lock_);
-      memory_fence();
 
       //temporary saving
       auto old_delta_idx_ = delta_idx_;
@@ -1892,7 +1887,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       tmp_delta_bitmap_size_ = 0;
       tmp_delta_idx_capacity_ = 0;
       node_status_ = INSERT_AT_DATA;
-      memory_fence();
       pthread_rwlock_unlock(&tmp_delta_index_rw_lock_);
       pthread_rwlock_unlock(&delta_index_rw_lock_);
       pthread_mutex_unlock(&insert_mutex_);
@@ -1905,7 +1899,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 #endif 
         child_just_splitted_ = false; //it now has new delta index
         reused_delta_idx_cnt_->lock();
-        memory_fence();
         reused_delta_idx_cnt_->val_ -= 1;
         if (reused_delta_idx_cnt_->val_ != 0) {
           //somebody is referencing this delta index
