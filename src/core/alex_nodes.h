@@ -1781,7 +1781,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   //while data node is being modified.
   void generate_new_delta_idx(int expected_min_numkey_per_data_node, uint64_t worker_id) {
     //make new delta index first.
-    int new_delta_idx_capacity = std::min((num_keys_ + delta_num_keys_), 1024); //guess it's okay for 1024?
+    int new_delta_idx_capacity = std::max((num_keys_ + delta_num_keys_), 1024); //guess it's okay for 1024?
     auto new_delta_bitmap_size = static_cast<size_t>(std::ceil(new_delta_idx_capacity / 64.));
     auto new_delta_bitmap = new (bitmap_allocator().allocate(new_delta_bitmap_size))
         uint64_t[new_delta_bitmap_size]();
