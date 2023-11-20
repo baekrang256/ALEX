@@ -62,7 +62,7 @@ typedef unsigned __int32 uint32_t;
 
 /*** string's limit value ***/
 #define STR_VAL_MAX 126
-#define STR_VAL_MIN 33
+#define STR_VAL_MIN 0
 
 /*** insertion location ***/
 #define INSERT_AT_DATA 0
