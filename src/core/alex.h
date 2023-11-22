@@ -1343,15 +1343,17 @@ public:
     } else {
       //doesn't exist. Try later.
       //Actually, this should not happen.
+#if DEBUG_PRINT
       alex::coutLock.lock();
       std::cout << "failed finding it everywhere?" << std::endl;
-      abort();
-      //auto parent = leaf->parent_;
-      //rcu_progress(worker_id);
-#if PROFILE
-      //update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
+      alex::coutLock.unlock();
 #endif
-      //return {1, 0, parent};
+      auto parent = leaf->parent_;
+      rcu_progress(worker_id);
+#if PROFILE
+      update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
+#endif
+      return {3, 0, parent};
     }
   }
 
