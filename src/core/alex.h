@@ -1324,7 +1324,7 @@ public:
   #if PROFILE
       update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
   #endif
-      return {1, 0, parent};
+      return {3, 0, parent};
     }
 
     //try finding key

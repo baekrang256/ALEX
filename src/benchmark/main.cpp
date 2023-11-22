@@ -622,7 +622,7 @@ void *run_fg(void *param) {
           std::cout << "t" << thread_id << " - ";
           std::cout << "read failed finding payload." << std::endl;
           if (strict_read) {
-            std::cout << "aborting" << std::endl;
+            std::cout << "aborting because of status " << std::get<0>(read_result) << std::endl;
             alex::coutLock.unlock();
             abort();
           }
