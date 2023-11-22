@@ -478,17 +478,16 @@ void *run_fg(void *param) {
           pending_op.push_back({false, read_cnt, 0, std::get<2>(read_result)});
         }
         else {
-          alex::coutLock.lock();
-          std::cout << "t" << thread_id << " - ";
-          std::cout << "read failed finding payload." << std::endl;
           if (strict_read) {
-            //2 : failed finding leaf
-            //3 : failed finding on all arrays (key_arr, delta, tmp_delta)
+            //status 2 : failed finding leaf
+            //status 3 : failed finding key on all possible arrays.
+            alex::coutLock.lock();
+            std::cout << "t" << thread_id << " - ";
+            std::cout << "read failed finding payload." << std::endl;
             std::cout << "aborting because of status " << std::get<0>(read_result) << std::endl;
             alex::coutLock.unlock();
             abort();
           }
-          alex::coutLock.unlock();
         }
       }
       read_cnt++;
@@ -618,15 +617,14 @@ void *run_fg(void *param) {
           pending_op.push_back(op_param);
         }
         else {
-          alex::coutLock.lock();
-          std::cout << "t" << thread_id << " - ";
-          std::cout << "read failed finding payload." << std::endl;
           if (strict_read) {
+            alex::coutLock.lock();
+            std::cout << "t" << thread_id << " - ";
+            std::cout << "read failed finding payload." << std::endl;
             std::cout << "aborting because of status " << std::get<0>(read_result) << std::endl;
             alex::coutLock.unlock();
             abort();
           }
-          alex::coutLock.unlock();
         }
       }
     }
