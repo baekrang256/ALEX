@@ -1663,6 +1663,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       delta_idx_ = new_delta_idx;
       memory_fence();
       node_status_ = INSERT_AT_DELTA;
+      memory_fence();
     }
     else {
 #if DEBUG_PRINT
@@ -1675,6 +1676,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       tmp_delta_idx_ = new_delta_idx;
       memory_fence();
       node_status_ = INSERT_AT_TMPDELTA;
+      memory_fence();
     }
 #if DEBUG_PRINT
     coutLock.lock();
