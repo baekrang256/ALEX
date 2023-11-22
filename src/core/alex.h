@@ -1111,7 +1111,7 @@ class Alex {
   // the returned data node
   static data_node_type* bulk_load_leaf_node_from_existing(
       const data_node_type* existing_node, AlexKey<T>** leaf_keys, P* leaf_payloads, 
-      int left, int right, uint64_t worker_id, self_type *this_ptr,
+      int left, int right, self_type *this_ptr,
       bool compute_cost = true, const fanout_tree::FTNode* tree_node = nullptr) {
     auto node = new (this_ptr->data_node_allocator().allocate(1))
         data_node_type(existing_node->parent_, this_ptr->key_less_, this_ptr->allocator_);
@@ -1120,7 +1120,7 @@ class Alex {
     // recompute it
     LinearModel<T> precomputed_model(tree_node->a, tree_node->b);
     node->bulk_load_from_existing(leaf_keys, leaf_payloads,
-                                  left, right, worker_id, &precomputed_model,
+                                  left, right, &precomputed_model,
                                   tree_node->num_keys, this_ptr->expected_min_numkey_per_data_node_);
 
     node->max_slots_ = this_ptr->derived_params_.max_data_node_slots;
@@ -1277,10 +1277,10 @@ public:
 #endif
       return {1, 0, parent};
     }
-    int idx = leaf->find_key(key, worker_id, KEY_ARR);
+    int idx = leaf->find_key(key, worker_id);
     
     if (idx >= 0) { //successful
-      P rval = leaf->get_payload(idx, KEY_ARR);
+      P rval = leaf->get_payload(idx);
       pthread_rwlock_unlock(&(leaf->key_array_rw_lock_));
       rcu_progress(worker_id);
 #if PROFILE
@@ -1291,47 +1291,8 @@ public:
 
     //failed finding in key_array. Try finding in delta index if it exists
     pthread_rwlock_unlock(&(leaf->key_array_rw_lock_));
-    if (leaf->delta_idx_ == nullptr) { //delta index doesn't exist
-      auto parent = leaf->parent_;
-      rcu_progress(worker_id);
-  #if PROFILE
-      update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
-  #endif
-      return {1, 0, parent};
-    }
-    else if (pthread_rwlock_tryrdlock(&(leaf->delta_index_rw_lock_))) { //failed obtaining lock
-      auto parent = leaf->parent_;
-      rcu_progress(worker_id);
-  #if PROFILE
-      update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
-  #endif
-      return {1, 0, parent};
-    }
-
-    //succeeded, so try finding key
-    idx = leaf->find_key(key, worker_id, DELTA_IDX);
-
-    if (idx >= 0) { //successful
-      P rval = leaf->get_payload(idx, DELTA_IDX);
-      pthread_rwlock_unlock(&(leaf->delta_index_rw_lock_));
-      rcu_progress(worker_id);
-#if PROFILE
-      update_profileStats_get_payload_success(get_payload_from_parent_start_time, last_parent, worker_id);
-#endif
-      return {0, rval, nullptr};
-    }
-
-    //failed finding in key_array. Try finding in delta index if it exists
-    pthread_rwlock_unlock(&(leaf->delta_index_rw_lock_));
-    if (leaf->tmp_delta_idx_ == nullptr) {//but tmp_delta_idx_ doesn't exist. failed
-      auto parent = leaf->parent_;
-      rcu_progress(worker_id);
-  #if PROFILE
-      update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
-  #endif
-      return {1, 0, parent};
-    }
-    if (pthread_rwlock_tryrdlock(&(leaf->tmp_delta_index_rw_lock_))) {//failed obtaining lock
+    auto delta_idx = leaf->delta_idx_;
+    if (delta_idx == nullptr) { //delta index doesn't exist
       auto parent = leaf->parent_;
       rcu_progress(worker_id);
   #if PROFILE
@@ -1340,26 +1301,57 @@ public:
       return {1, 0, parent};
     }
 
-    idx = leaf->find_key(key, worker_id, TMP_DELTA_IDX);
-
-    if (idx >= 0) { //successful
-      P rval = leaf->get_payload(idx, TMP_DELTA_IDX);
-      pthread_rwlock_unlock(&(leaf->tmp_delta_index_rw_lock_));
-      rcu_progress(worker_id);
-#if PROFILE
-      update_profileStats_get_payload_success(get_payload_from_parent_start_time, last_parent, worker_id);
-#endif
-      return {0, rval, nullptr};
-    }
-    else {
-      //failed. Try later.
-      pthread_rwlock_unlock(&(leaf->tmp_delta_index_rw_lock_));
+    //try finding key
+    std::pair<bool, P> result = delta_idx->get_payload(key);
+    if (!result.first && !result.second) {
+      //failed because it's locked
       auto parent = leaf->parent_;
       rcu_progress(worker_id);
 #if PROFILE
       update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
 #endif
       return {1, 0, parent};
+    }
+    else if (result.first) { //success
+      return {0, result.second, nullptr};
+    }
+
+    //failed finding in delta index. Try finding in tmp delta index if it exists
+    auto tmp_delta_idx = leaf->tmp_delta_idx_;
+    if (tmp_delta_idx == nullptr) {//but tmp_delta_idx_ doesn't exist. failed
+      auto parent = leaf->parent_;
+      rcu_progress(worker_id);
+  #if PROFILE
+      update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
+  #endif
+      return {1, 0, parent};
+    }
+
+    //try finding key
+    result = tmp_delta_idx->get_payload(key);
+    if (!result.first && !result.second) {
+      //failed because it's locked
+      auto parent = leaf->parent_;
+      rcu_progress(worker_id);
+#if PROFILE
+      update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
+#endif
+      return {1, 0, parent};
+    }
+    else if (result.first) { //success
+      return {0, result.second, nullptr};
+    } else {
+      //doesn't exist. Try later.
+      //Actually, this should not happen.
+      alex::coutLock.lock();
+      std::cout << "failed finding it everywhere?" << std::endl;
+      abort();
+      //auto parent = leaf->parent_;
+      //rcu_progress(worker_id);
+#if PROFILE
+      //update_profileStats_get_payload_fail(get_payload_from_parent_start_time, last_parent, worker_id);
+#endif
+      //return {1, 0, parent};
     }
   }
 
@@ -1653,7 +1645,7 @@ public:
                   << "with bucketID " << traversal_path.back().bucketID << " and parent " << leaf->parent_ << std::endl;
         coutLock.unlock();
   #endif
-        leaf->generate_new_delta_idx(expected_min_numkey_per_data_node_, worker_id);
+        leaf->generate_new_delta_idx(worker_id);
         {
           std::lock_guard<std::mutex> lk(cvm);
           std::pair<void *, int> job_pair = {param, 1};
@@ -1674,7 +1666,7 @@ public:
                     << "with bucketID " << traversal_path.back().bucketID << " and parent " << leaf->parent_ << std::endl;
           coutLock.unlock();
   #endif
-        leaf->generate_new_delta_idx(expected_min_numkey_per_data_node_, worker_id);
+        leaf->generate_new_delta_idx(worker_id);
         {
           std::lock_guard<std::mutex> lk(cvm);
           std::pair<void *, int> job_pair = {param, 0};
@@ -1768,7 +1760,7 @@ public:
     std::cout << "id is : " << pthread_self() << '\n';
     std::cout << "parent is : " << parent << '\n';
     std::cout << "bucketID : " << bucketID << '\n';
-    std::cout << "leaf's node_status_ is : " << leaf->node_status_ << std::endl;
+    std::cout << "leaf's node_status_ is : " << leaf->node_status_ << '\n' << std::endl;
     //std::cout << "reason is : " << fail << std::endl;
     alex::coutLock.unlock();
 #endif
@@ -1781,30 +1773,31 @@ public:
     //make array of holding key/payload pointers
     //used for inserting and fanout finding
     //we also make model for find_best_fanout_existing_node
-    typedef typename AlexDataNode<T, P>::const_iterator_type node_iterator; 
+    typedef typename AlexDataNode<T, P>::const_iterator_type node_iterator;
+    typedef typename DeltaIndex<T, P>::delta_key_iterator_t delta_key_iterator;
     int total_num_keys;
     int leaf_status = leaf->node_status_;
     bool leaf_just_splitted = leaf->child_just_splitted_;
     if (leaf_just_splitted) {
       int leaf_delta_insert_keys_ = 0;
       if (leaf->was_left_child_) {
-        node_iterator it(leaf, 0, true);
-        while (!it.is_end() && it.cur_idx_ < leaf->boundary_base_key_idx_) {
-          it++;
+        delta_key_iterator it(leaf->delta_idx_);
+        while (!it.is_end() && it.key() < leaf->boundary_base_key_) {
+          it.next();
           leaf_delta_insert_keys_++;
         }
       }
       else {
-        node_iterator it(leaf, leaf->boundary_base_key_idx_, true);
+        delta_key_iterator it(leaf->delta_idx_, &leaf->boundary_base_key_);
         while (!it.is_end()) {
-          it++;
+          it.next();
           leaf_delta_insert_keys_++;
         }
       }
 #if DEBUG_PRINT
       coutLock.lock();
       std::cout << "t" << worker_id << "'s generated thread - "
-                << leaf->was_left_child_ << ", " << leaf->boundary_base_key_idx_ << ", "
+                << leaf->was_left_child_ << ", " << leaf->boundary_base_key_.key_arr_ << ", "
                 << leaf_delta_insert_keys_ << ", " << leaf->num_keys_ << std::endl;
       coutLock.unlock();
 #endif
@@ -1816,12 +1809,12 @@ public:
       std::cout << "t" << worker_id << "'s generated thread - "
                 << leaf_status << ", " << leaf->num_keys_;
       if (leaf_status != INSERT_AT_DELTA) {
-        std::cout << ", " << leaf->delta_num_keys_;
+        std::cout << ", " << leaf->delta_idx_->tot_key_n_;
       }
       std::cout << std::endl;
       coutLock.unlock();
 #endif
-      total_num_keys = leaf->num_keys_ + (leaf_status == INSERT_AT_DELTA ? 0 : leaf->delta_num_keys_);
+      total_num_keys = leaf->num_keys_ + (leaf_status == INSERT_AT_DELTA ? 0 : leaf->delta_idx_->tot_key_n_);
     }
 
 #if DEBUG_PRINT
@@ -1848,25 +1841,25 @@ public:
       }
     }
     else if (leaf_status == INSERT_AT_TMPDELTA) {
-      int delta_start_idx;
+      AlexKey<T> *delta_start_key = nullptr;
       if (leaf_just_splitted && leaf->was_right_child_) {
-        delta_start_idx = leaf->boundary_base_key_idx_;
+        delta_start_key = &leaf->boundary_base_key_;
       }
-      else {delta_start_idx = 0;}
+
       AlexKey<T> *key_ptr;
       P payload;
 
-      node_iterator delta_it(leaf, delta_start_idx, true);
+      delta_key_iterator delta_it(leaf->delta_idx_, delta_start_key);
       while (key_cnt < total_num_keys) {
-        if (it.is_smaller(delta_it)) {
+        if (leaf->it_is_smaller(it, delta_it)) {
           key_ptr = &it.key();
           payload = it.payload();
           it++;
         }
         else {
           key_ptr = &delta_it.key();
-          payload = it.payload();
-          delta_it++;
+          payload = delta_it.payload();
+          delta_it.next();
         }
         
         tmp_model_builder.add(*key_ptr, ((double) key_cnt / (total_num_keys - 1)));
@@ -1915,7 +1908,7 @@ public:
 #if DEBUG_PRINT
       alex::coutLock.lock();
       std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
-      std::cout << "failed and decided to expand" << std::endl;
+      std::cout << "failed and decided to expand" << '\n' << std::endl;
       alex::coutLock.unlock();
 #endif
       // expand existing data node and retrain model
@@ -1940,7 +1933,7 @@ public:
 #if DEBUG_PRINT
         alex::coutLock.lock();
         std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
-        std::cout << "failed and decided to split downwards" << std::endl;
+        std::cout << "failed and decided to split downwards" << '\n' << std::endl;
         alex::coutLock.unlock();
 #endif
         split_downwards(parent, bucketID, fanout_tree_depth, model_param, used_fanout_tree_nodes,
@@ -1949,7 +1942,7 @@ public:
 #if DEBUG_PRINT
         alex::coutLock.lock();
         std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
-        std::cout << "failed and decided to split sideways" << std::endl;
+        std::cout << "failed and decided to split sideways" << '\n' << std::endl;
         alex::coutLock.unlock();
 #endif
         split_sideways(parent, bucketID, fanout_tree_depth, used_fanout_tree_nodes,
@@ -2139,8 +2132,7 @@ public:
   //final working for split_sideways.
   //noticable part is that old_node's parent is same as parameter 'parent'.
   void cndn_final_work_for_split_sideways(data_node_type *old_node, model_node_type *parent, int old_node_status,
-                                          int mid_boundary, AlexKey<T>** leaf_keys, int start_bucketID, 
-                                          AlexKey<T>* old_node_activated_delta_idx, 
+                                          int mid_boundary, AlexKey<T>** leaf_keys, int start_bucketID,
                                           std::vector<std::pair<node_type *, int>> &generated_nodes,
                                           uint64_t worker_id) {
     //We now stop inserting to delta index/tmp delta index of old node
@@ -2149,43 +2141,12 @@ public:
     //After unlock of children_rw_lock_, threads will start inserting to new node.
     pthread_mutex_lock(&old_node->insert_mutex_);
     pthread_rwlock_wrlock(&parent->children_rw_lock_);
-    int old_node_activated_delta_idx_capacity_;
-    int old_node_activated_delta_idx_num_keys_;
-    int old_node_activated_delta_idx_bitmap_size_;
-
-    if (old_node_status == INSERT_AT_DELTA) {
-      old_node_activated_delta_idx_capacity_ = old_node->delta_idx_capacity_;
-      old_node_activated_delta_idx_num_keys_ = old_node->delta_num_keys_;
-      old_node_activated_delta_idx_bitmap_size_ = old_node->delta_bitmap_size_;
-    }
-    else {
-      old_node_activated_delta_idx_capacity_ = old_node->tmp_delta_idx_capacity_;
-      old_node_activated_delta_idx_num_keys_ = old_node->tmp_delta_num_keys_;
-      old_node_activated_delta_idx_bitmap_size_ = old_node->tmp_delta_bitmap_size_;
-    }
-
-    int left_idx = 0;
-    int right_idx = old_node_activated_delta_idx_capacity_;
-    int mid = left_idx + (right_idx - left_idx) / 2;
-
-    while (left_idx < right_idx) {
-      if (old_node_activated_delta_idx[mid] < *leaf_keys[mid_boundary]) {
-        left_idx = mid + 1;
-      }
-      else {
-        right_idx = mid;
-      }
-      mid = left_idx + (right_idx - left_idx) / 2;
-    }
 
     int cur = start_bucketID;
     for (auto it = generated_nodes.begin(); it != generated_nodes.end(); ++it) { //should be two
       auto generated_node_pair = *it;
       data_node_type *generated_node = (data_node_type *) generated_node_pair.first;
-      generated_node->delta_idx_capacity_ = old_node_activated_delta_idx_capacity_;
-      generated_node->delta_num_keys_ = old_node_activated_delta_idx_num_keys_;
-      generated_node->delta_bitmap_size_ = old_node_activated_delta_idx_bitmap_size_;
-      generated_node->boundary_base_key_idx_ = left_idx;
+      generated_node->boundary_base_key_ = *leaf_keys[mid_boundary];
 
       for (int i = cur; i < cur + generated_node_pair.second; ++i) {
         parent->children_[i] = generated_node_pair.first;
@@ -2199,16 +2160,10 @@ public:
       for (int i = 0 ; i < parent->num_children_; i++) {
         std::cout << i << " : " << parent->children_[i] << '\n';
       }
-      std::cout << "delta idx capacity is " << old_node_activated_delta_idx_capacity_ << '\n'; 
-      std::cout << "boundary base key idx is : " << left_idx << '\n';
-      std::cout << "delta index's key count is : " << old_node_activated_delta_idx_num_keys_ << '\n';
+      std::cout << "boundary base key is : " << leaf_keys[mid_boundary]->key_arr_ << '\n';
       std::cout << std::flush;
       alex::coutLock.unlock();
 #endif
-    pthread_mutex_unlock(&old_node->insert_mutex_);  
-    pthread_rwlock_unlock(&parent->children_rw_lock_);
-    //now, the threads will insert to this new node.
-
     //some cleanups
     //preventing deletion of old delta index, since it's used by children.
     if (old_node_status == INSERT_AT_DELTA) {old_node->delta_idx_ = nullptr;}
@@ -2217,6 +2172,10 @@ public:
       std::cout << "modified node that wasn't supposed to be modified?" << std::endl;
       abort();
     }
+
+    pthread_mutex_unlock(&old_node->insert_mutex_);  
+    pthread_rwlock_unlock(&parent->children_rw_lock_);
+    //now, the threads will insert to this new node.
     return;
   }
 
@@ -2225,7 +2184,6 @@ public:
   //This makes semantic difference compared to above function
   void cndn_final_work_for_split_downwards(data_node_type *old_node, model_node_type *parent, int old_node_status,
                                           int mid_boundary, AlexKey<T>** leaf_keys, int start_bucketID, 
-                                          AlexKey<T>* old_node_activated_delta_idx, 
                                           std::vector<std::pair<node_type *, int>> &generated_nodes,
                                           uint64_t worker_id) {
     //We 'first' updae 'new' model node's metadata. (parent)
@@ -2242,42 +2200,11 @@ public:
     //than move the delta/tmp delta index of old node to new node's
     //Then we actually move the new model node to already existing model node's children.
     pthread_mutex_lock(&old_node->insert_mutex_);
-    int old_node_activated_delta_idx_capacity_;
-    int old_node_activated_delta_idx_num_keys_;
-    int old_node_activated_delta_idx_bitmap_size_;
-
-    if (old_node_status == INSERT_AT_DELTA) {
-      old_node_activated_delta_idx_capacity_ = old_node->delta_idx_capacity_;
-      old_node_activated_delta_idx_num_keys_ = old_node->delta_num_keys_;
-      old_node_activated_delta_idx_bitmap_size_ = old_node->delta_bitmap_size_;
-    }
-    else {
-      old_node_activated_delta_idx_capacity_ = old_node->tmp_delta_idx_capacity_;
-      old_node_activated_delta_idx_num_keys_ = old_node->tmp_delta_num_keys_;
-      old_node_activated_delta_idx_bitmap_size_ = old_node->tmp_delta_bitmap_size_;
-    }
-
-    int left_idx = 0;
-    int right_idx = old_node_activated_delta_idx_capacity_;
-    int mid = left_idx + (right_idx - left_idx) / 2;
-
-    while (left_idx < right_idx) {
-      if (old_node_activated_delta_idx[mid] < *leaf_keys[mid_boundary]) {
-        left_idx = mid + 1;
-      }
-      else {
-        right_idx = mid;
-      }
-      mid = left_idx + (right_idx - left_idx) / 2;
-    }
 
     for (auto it = generated_nodes.begin(); it != generated_nodes.end(); ++it) { //should be two
       auto generated_node_pair = *it;
       data_node_type *generated_node = (data_node_type *) generated_node_pair.first;
-      generated_node->delta_idx_capacity_ = old_node_activated_delta_idx_capacity_;
-      generated_node->delta_num_keys_ = old_node_activated_delta_idx_num_keys_;
-      generated_node->delta_bitmap_size_ = old_node_activated_delta_idx_bitmap_size_;
-      generated_node->boundary_base_key_idx_ = left_idx;
+      generated_node->boundary_base_key_ = *leaf_keys[mid_boundary];
     }
 #if DEBUG_PRINT
       alex::coutLock.lock();
@@ -2286,9 +2213,7 @@ public:
       for (int i = 0 ; i < parent->num_children_; i++) {
         std::cout << i << " : " << parent->children_[i] << '\n';
       }
-      std::cout << "delta idx capacity is " << old_node_activated_delta_idx_capacity_ << '\n'; 
-      std::cout << "boundary base key idx is : " << left_idx << '\n';
-      std::cout << "delta index's key count is : " << old_node_activated_delta_idx_num_keys_ << '\n';
+      std::cout << "boundary base key is : " << leaf_keys[mid_boundary]->key_arr_ << '\n';
       std::cout << std::flush;
       alex::coutLock.unlock();
 #endif
@@ -2334,22 +2259,13 @@ public:
     data_node_type* prev_leaf =
         old_node->prev_leaf_.read();  // used for linking the new data nodes
     int old_node_status = old_node->node_status_;
-    AlexKey<T>* old_node_activated_delta_idx;
-    P* old_node_activated_delta_payload;
-    uint64_t* old_node_activated_bitmap;
-    LinearModel<T> old_node_activated_delta_model;
+    DeltaIndex<T, P>* old_node_activated_delta_idx;
 
     if (old_node_status == INSERT_AT_DELTA) {
       old_node_activated_delta_idx = old_node->delta_idx_;
-      old_node_activated_delta_payload = old_node->delta_idx_payloads_;
-      old_node_activated_bitmap = old_node->delta_bitmap_;
-      old_node_activated_delta_model = old_node->delta_idx_model_;
     }
     else {
       old_node_activated_delta_idx = old_node->tmp_delta_idx_;
-      old_node_activated_delta_payload = old_node->tmp_delta_idx_payloads_;
-      old_node_activated_bitmap = old_node->tmp_delta_bitmap_;
-      old_node_activated_delta_model = old_node->tmp_delta_idx_model_;
     }
 
 #if DEBUG_PRINT
@@ -2374,7 +2290,7 @@ public:
       right_boundary = tree_node.right_boundary;
       data_node_type* child_node = bulk_load_leaf_node_from_existing(
           old_node, leaf_keys, leaf_payloads, left_boundary, right_boundary, 
-          worker_id, this_ptr, false, &tree_node);
+          this_ptr, false, &tree_node);
 #if DEBUG_PRINT
       alex::coutLock.lock();
       std::cout << "t" << worker_id << "'s generated thread for parent " << parent << " - ";
@@ -2391,12 +2307,9 @@ public:
       
       //new data node's delta index related metadata update
       child_node->delta_idx_ = old_node_activated_delta_idx;
-      child_node->delta_idx_payloads_ = old_node_activated_delta_payload;
-      child_node->delta_bitmap_ = old_node_activated_bitmap;
       child_node->child_just_splitted_ = true;
       child_node->reused_delta_idx_cnt_ = reused_delta_idx_cnt;
       reused_delta_idx_cnt->val_ += 1;
-      child_node->delta_idx_model_ = old_node_activated_delta_model;
 
       if (first_iter) { //left leaf is not a new data node. Should be first node only.
         mid_boundary = right_boundary;
@@ -2481,13 +2394,11 @@ public:
 
     if (mode) {
       this_ptr->cndn_final_work_for_split_sideways(old_node, parent, old_node_status,
-          mid_boundary, leaf_keys, start_bucketID, old_node_activated_delta_idx,
-           generated_nodes, worker_id);
+          mid_boundary, leaf_keys, start_bucketID, generated_nodes, worker_id);
     }
     else {
       this_ptr->cndn_final_work_for_split_downwards(old_node, parent, old_node_status,
-          mid_boundary, leaf_keys, start_bucketID, old_node_activated_delta_idx,
-           generated_nodes, worker_id);
+          mid_boundary, leaf_keys, start_bucketID, generated_nodes, worker_id);
     }
 
 #if DEBUG_PRINT

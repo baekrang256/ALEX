@@ -11,6 +11,7 @@
 #pragma once
 
 #include "alex_base.h"
+#include "alex_delta_index.h"
 #include <map>
 
 #define ALEX_DATA_NODE_KEY_AT(i) key_slots_[i]
@@ -191,6 +192,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   typedef AlexNode<T, P, Alloc> basic_node_type;
   typedef AlexModelNode<T, P, Alloc> model_node_type;
   typedef AlexDataNode<T, P, Compare, Alloc, allow_duplicates> self_type;
+  typedef DeltaIndex<T, P> delta_idx_type;
+  typedef typename DeltaIndex<T, P>::delta_key_iterator_t delta_key_iterator_type;
   typedef typename Alloc::template rebind<AlexKey<T>>::other key_alloc_type;
   typedef typename Alloc::template rebind<self_type>::other alloc_type;
   typedef typename Alloc::template rebind<P>::other payload_alloc_type;
@@ -216,26 +219,16 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   AlexKey<T>* key_slots_ = nullptr;  // holds keys
   P* payload_slots_ =
       nullptr;  // holds payloads, must be same size as key_slots
-  AlexKey<T>* delta_idx_ = nullptr;  // holds keys
-  P* delta_idx_payloads_ =
-      nullptr;  // holds payloads, must be same size as key_slots
-  AlexKey<T>* tmp_delta_idx_ = nullptr;  // holds keys
-  P* tmp_delta_idx_payloads_ =
-      nullptr;  // holds payloads, must be same size as key_slots
+  delta_idx_type *delta_idx_ = nullptr;
+  delta_idx_type * tmp_delta_idx_ = nullptr;
 
   pthread_mutex_t insert_mutex_ = PTHREAD_MUTEX_INITIALIZER;
   pthread_rwlock_t key_array_rw_lock_ = PTHREAD_RWLOCK_INITIALIZER;
-  pthread_rwlock_t delta_index_rw_lock_ = PTHREAD_RWLOCK_INITIALIZER;
-  pthread_rwlock_t tmp_delta_index_rw_lock_ = PTHREAD_RWLOCK_INITIALIZER;
 
   int node_status_ = INSERT_AT_DATA;
 
   int data_capacity_ = 0;  // size of key/data_slots array
-  int delta_idx_capacity_ = 0; //size of delta index
-  int tmp_delta_idx_capacity_ = 0; //size of temporary delta index
   int num_keys_ = 0;  // number of filled key/data slots (as opposed to gaps)
-  int delta_num_keys_ = 0; //number of filled key/data slots in delta index
-  int tmp_delta_num_keys_ = 0; //number of filled key/data slots in temporary delta index
   T *the_max_key_arr_; //theoretic maximum key_arr
   T *the_min_key_arr_; //theoretic minimum key_arr
 
@@ -244,24 +237,16 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // bit)
   uint64_t* bitmap_ = nullptr;
   int bitmap_size_ = 0;  // number of int64_t in bitmap
-  uint64_t* delta_bitmap_ = nullptr;
-  int delta_bitmap_size_ = 0;
-  uint64_t* tmp_delta_bitmap_ = nullptr;
-  int tmp_delta_bitmap_size_ = 0;
-
-  //models for delta indexes
-  LinearModel<T> delta_idx_model_;
-  LinearModel<T> tmp_delta_idx_model_;
 
   //some variables related to delta index semantic
   bool child_just_splitted_ = false; //true if it is a child that just splitted out from parent
   AtomicVal<int> *reused_delta_idx_cnt_ = nullptr; //number of node's referencing this node's delta index
                                                    //generated when it splitted from specific data node
                                                    //valid only for first split or resizing
-  int boundary_base_key_idx_; //A key index that should be considered when merging with delta index
-                              //generated when it splitted from specific data node
-                              //valid only for first split or resizing.
-                              //should be a starting key of right child
+  AlexKey<T> boundary_base_key_; //A key that should be considered when merging with delta index
+                                 //generated when it splitted from specific data node
+                                 //valid only for first split or resizing.
+                                 //should be a starting key of right child
   bool was_left_child_ = false; //was it a left child when splitted?
   bool was_right_child_ = false; //was it a right child when splitted?
 
@@ -364,14 +349,12 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         reused_delta_idx_cnt_->val_ -= 1;
         if (reused_delta_idx_cnt_->val_ == 0) {
           delete reused_delta_idx_cnt_;
-          delete[] delta_idx_;
+          delete delta_idx_;
         }
         else {reused_delta_idx_cnt_->unlock();}
       }
       else {
-        delete[] delta_idx_;
-        payload_allocator().deallocate(delta_idx_payloads_, delta_idx_capacity_);
-        bitmap_allocator().deallocate(delta_bitmap_, delta_bitmap_size_);
+        delete delta_idx_;
       }
     }
 
@@ -380,8 +363,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 
     pthread_mutex_destroy(&insert_mutex_);
     pthread_rwlock_destroy(&key_array_rw_lock_);
-    pthread_rwlock_destroy(&delta_index_rw_lock_);
-    pthread_rwlock_destroy(&tmp_delta_index_rw_lock_);
   }
 
   AlexDataNode(self_type& other)
@@ -455,28 +436,16 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   //newly added for actual content achieving without need for max_length data.
   inline T *get_key_arr(int pos) const { return get_key(pos).key_arr_; }
 
-  inline P& get_payload(int pos, int mode = 0) const {
-    if (mode == KEY_ARR) {return payload_slots_[pos];}
-    else if (mode == DELTA_IDX) {return delta_idx_payloads_[pos];}
-    else {return tmp_delta_idx_payloads_[pos];}
+  inline P& get_payload(int pos) const {
+    return payload_slots_[pos];
   }
 
   // Check whether the position corresponds to a key (as opposed to a gap)
-  bool check_exists(int pos, int mode = 0) const {
+  bool check_exists(int pos) const {
     int bitmap_pos = pos >> 6;
     int bit_pos = pos - (bitmap_pos << 6);
-    switch (mode) {
-      case KEY_ARR:
-        assert(pos >= 0 && pos < data_capacity_);
-        return static_cast<bool>(bitmap_[bitmap_pos] & (1ULL << bit_pos));
-      case DELTA_IDX:
-        assert(pos >= 0 && pos < delta_idx_capacity_);
-        return static_cast<bool>(delta_bitmap_[bitmap_pos] & (1ULL << bit_pos));
-      case TMP_DELTA_IDX:
-        assert(pos >= 0 && pos < tmp_delta_idx_capacity_);
-        return static_cast<bool>(tmp_delta_bitmap_[bitmap_pos] & (1ULL << bit_pos));
-    }
-    return false;
+    assert(pos >= 0 && pos < data_capacity_);
+    return static_cast<bool>(bitmap_[bitmap_pos] & (1ULL << bit_pos));
   }
 
   // Mark the entry for position in the bitmap
@@ -628,23 +597,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       bitmap_size = node->bitmap_size_;
       key_slots = node->key_slots_;
       payload_slots = node->payload_slots_;
-      initialize();
-    }
-
-    Iterator(node_type* node, int idx, bool isDeltaIdx) : cur_idx_(idx) {
-      node_ = node;
-      if (isDeltaIdx) { //for delta index
-        bitmap = node->delta_bitmap_;
-        bitmap_size = node->delta_bitmap_size_;
-        key_slots = node->delta_idx_;
-        payload_slots = node->delta_idx_payloads_;
-      }
-      else { //for normal node iterating.
-        bitmap = node->bitmap_;
-        bitmap_size = node->bitmap_size_;
-        key_slots = node->key_slots_;
-        payload_slots = node->payload_slots_;
-      }
       initialize();
     }
 
@@ -1275,7 +1227,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // redundant work
   void bulk_load_from_existing(
       AlexKey<T>** leaf_keys, P* leaf_payloads, int left, int right, 
-      uint64_t worker_id, const LinearModel<T>* precomputed_model,
+      const LinearModel<T>* precomputed_model,
       int precomputed_num_actual_keys,int expected_min_numkey_per_data_node) {
     //assert(left >= 0 && right <= node->data_capacity_);
 
@@ -1465,77 +1417,28 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     }
   }
 
-  // Unused function: builds a spline model by connecting the smallest and
-  // largest points instead of using
-  // a linear regression
-  //static void build_spline(const V* values, int num_keys,
-  //                         const LinearModel<T>* model) {
-  //  int y_max = num_keys - 1;
-  //  int y_min = 0;
-  //  model->a_ = static_cast<double>(y_max - y_min) /
-  //              (values[y_max].first - values[y_min].first);
-  //  model->b_ = -1.0 * values[y_min].first * model->a_;
-  //}
-
   /*** Lookup ***/
 
   // Predicts the position of a key in data array using the model
-  inline int predict_position(const AlexKey<T>& key, int mode = KEY_ARR) const {
-    int position;
-    switch(mode) {
-      case KEY_ARR:
-        position = this->model_.predict(key);
-        position = std::max<int>(std::min<int>(position, data_capacity_ - 1), 0);
-        break;
-      case DELTA_IDX:
-        assert(delta_idx_ != nullptr);
-        position = delta_idx_model_.predict(key);
-        position = std::max<int>(std::min<int>(position, delta_idx_capacity_ - 1), 0);
-        break;
-      case TMP_DELTA_IDX:
-        if (tmp_delta_idx_ == nullptr) {
-          std::cout << "leaf pointer - " << this << " has empty tmp delta?\n";
-          abort();
-        }
-        position = tmp_delta_idx_model_.predict(key);
-        position = std::max<int>(std::min<int>(position, tmp_delta_idx_capacity_ - 1), 0);
-        break;
-    }
-    return position;
+  inline int predict_position(const AlexKey<T>& key) const {
+    return std::max<int>(std::min<int>(this->model_.predict(key), data_capacity_-1), 0);
   }
 
   // Searches for the last non-gap position equal to key
   // If no positions equal to key, returns -1
-  int find_key(const AlexKey<T>& key, uint64_t worker_id, int mode) {
+  int find_key(const AlexKey<T>& key, uint64_t worker_id) {
     //start searching when no write is running.
 #if PROFILE
     auto find_key_start_time = std::chrono::high_resolution_clock::now();
     profileStats.find_key_call_cnt[worker_id]++;
 #endif
-    AlexKey<T> *ref_arr;
-    int ref_capacity;
-    switch(mode) {
-      case DELTA_IDX:
-        ref_arr = delta_idx_;
-        ref_capacity = delta_idx_capacity_;
-        break;
-      case TMP_DELTA_IDX:
-        ref_arr = tmp_delta_idx_;
-        ref_capacity = tmp_delta_idx_capacity_;
-        break;
-      default:
-        ref_arr = key_slots_;
-        ref_capacity = data_capacity_;
-        break;
-    }
-
     num_lookups_++;
-    int predicted_pos = predict_position(key, mode);
+    int predicted_pos = predict_position(key);
 
     // The last key slot with a certain value is guaranteed to be a real key
     // (instead of a gap)
-    int pos = exponential_search_upper_bound(predicted_pos, key, ref_arr, ref_capacity) - 1;
-    if (pos < 0 || !key_equal(ref_arr[pos], key)) {
+    int pos = exponential_search_upper_bound(predicted_pos, key) - 1;
+    if (pos < 0 || !key_equal(key_slots_[pos], key)) {
       return -1;
     } else {
 #if PROFILE
@@ -1580,18 +1483,13 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // If there are duplicate keys, the insert position will be to the right of
   // all existing keys of the same value.
   std::pair<int, int> find_insert_position(const AlexKey<T>& key, uint64_t worker_id) {
-    return find_insert_position(key, key_slots_, data_capacity_, KEY_ARR, worker_id);
-  }
-
-  std::pair<int, int> find_insert_position(const AlexKey<T>& key, AlexKey<T> *ref_arr, 
-                                           int ref_capacity, int node_status, uint64_t worker_id) {
 #if PROFILE
     profileStats.find_insert_position_call_cnt[worker_id]++;
     auto find_insert_position_start_time = std::chrono::high_resolution_clock::now();
 #endif
-    int predicted_pos = predict_position(key, node_status);
+    int predicted_pos = predict_position(key);
     // insert to the right of duplicate keys
-    int pos = exponential_search_upper_bound(predicted_pos, key, ref_arr, ref_capacity);
+    int pos = exponential_search_upper_bound(predicted_pos, key);
 #if PROFILE
     auto find_insert_position_end_time = std::chrono::high_resolution_clock::now();
     auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(
@@ -1603,13 +1501,12 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     profileStats.min_find_insert_position_time[worker_id] =
       std::min(profileStats.min_find_insert_position_time[worker_id], elapsed_time);
 #endif
-    if (predicted_pos <= pos || check_exists(pos, node_status)) {
+    if (predicted_pos <= pos || check_exists(pos)) {
       return {pos, pos};
     } else {
       // Place inserted key as close as possible to the predicted position while
       // maintaining correctness
-      return {std::min(predicted_pos, get_next_filled_position(pos, true, node_status) - 1),
-              pos};
+      return {std::min(predicted_pos, get_next_filled_position(pos, true) - 1), pos};
     }
   }
 
@@ -1617,36 +1514,16 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // If no more filled positions, will return data_capacity
   // If exclusive is true, output is at least (pos + 1)
   // If exclusive is false, output can be pos itself
-  int get_next_filled_position(int pos, bool exclusive, int node_status = INSERT_AT_DATA) const {
-    int ref_capacity;
-    uint64_t *ref_bitmap;
-    int ref_bitmap_size;
-    switch(node_status) {
-      case INSERT_AT_DELTA:
-        ref_capacity = delta_idx_capacity_;
-        ref_bitmap = delta_bitmap_;
-        ref_bitmap_size = delta_bitmap_size_;
-        break;
-      case INSERT_AT_TMPDELTA:
-        ref_capacity = tmp_delta_idx_capacity_;
-        ref_bitmap = tmp_delta_bitmap_;
-        ref_bitmap_size = tmp_delta_bitmap_size_;
-        break;
-      default:
-        ref_capacity = data_capacity_;
-        ref_bitmap = bitmap_;
-        ref_bitmap_size = bitmap_size_;
-    }
-    
+  int get_next_filled_position(int pos, bool exclusive) const {
     if (exclusive) {
       pos++;
-      if (pos == ref_capacity) {
-        return ref_capacity;
+      if (pos == data_capacity_) {
+        return data_capacity_;
       }
     }
 
     int curBitmapIdx = pos >> 6;
-    uint64_t curBitmapData = ref_bitmap[curBitmapIdx];
+    uint64_t curBitmapData = bitmap_[curBitmapIdx];
 
     // Zero out extra bits
     int bit_pos = pos - (curBitmapIdx << 6);
@@ -1654,10 +1531,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 
     while (curBitmapData == 0) {
       curBitmapIdx++;
-      if (curBitmapIdx >= ref_bitmap_size) {
-        return ref_capacity;
+      if (curBitmapIdx >= bitmap_size_) {
+        return data_capacity_;
       }
-      curBitmapData = ref_bitmap[curBitmapIdx];
+      curBitmapData = bitmap_[curBitmapIdx];
     }
     uint64_t bit = extract_rightmost_one(curBitmapData);
     return get_offset(curBitmapIdx, bit);
@@ -1675,45 +1552,40 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 
   // Searches for the first position greater than key, starting from position m
   // Returns position in range [0, data_capacity]
-  int exponential_search_upper_bound(int m, const AlexKey<T>& key) {
-    return exponential_search_upper_bound(m, key, key_slots_, data_capacity_);
-  }
-
-  inline int exponential_search_upper_bound(int m, const AlexKey<T>& key, 
-                                            AlexKey<T> *ref_arr, int ref_capacity) {
+  inline int exponential_search_upper_bound(int m, const AlexKey<T>& key) {
     // Continue doubling the bound until it contains the upper bound. Then use
     // binary search.
     int bound = 1;
     int l, r;  // will do binary search in range [l, r)
-    if (key_greater(ref_arr[m], key)) {
+    if (key_greater(key_slots_[m], key)) {
       int size = m;
       while (bound < size &&
-             key_greater(ref_arr[m - bound], key)) {
+             key_greater(key_slots_[m - bound], key)) {
         bound *= 2;
         num_exp_search_iterations_++;
       }
       l = m - std::min<int>(bound, size);
       r = m - bound / 2;
     } else {
-      int size = ref_capacity - m;
+      int size = data_capacity_ - m;
       while (bound < size &&
-             key_lessequal(ref_arr[m + bound], key)) {
+             key_lessequal(key_slots_[m + bound], key)) {
         bound *= 2;
         num_exp_search_iterations_++;
       }
       l = m + bound / 2;
       r = m + std::min<int>(bound, size);
     }
-    return binary_search_upper_bound(l, r, key, ref_arr);
+    return binary_search_upper_bound(l, r, key);
   }
 
   // Searches for the first position greater than key in range [l, r)
   // https://stackoverflow.com/questions/6443569/implementation-of-c-lower-bound
   // Returns position in range [l, r]
-  inline int binary_search_upper_bound(int l, int r, const AlexKey<T>& key, AlexKey<T>* ref_arr) const {
+  inline int binary_search_upper_bound(int l, int r, const AlexKey<T>& key) const {
     while (l < r) {
       int mid = l + (r - l) / 2;
-      if (key_lessequal(ref_arr[mid], key)) {
+      if (key_lessequal(key_slots_[mid], key)) {
         l = mid + 1;
       } else {
         r = mid;
@@ -1779,36 +1651,18 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 
   //make temporal delta index for insert to use
   //while data node is being modified.
-  void generate_new_delta_idx(int expected_min_numkey_per_data_node, uint64_t worker_id) {
-    //make new delta index first.
-    int new_delta_idx_capacity = std::max((num_keys_ + delta_num_keys_), 1024); //guess it's okay for 1024?
-    auto new_delta_bitmap_size = static_cast<size_t>(std::ceil(new_delta_idx_capacity / 64.));
-    auto new_delta_bitmap = new (bitmap_allocator().allocate(new_delta_bitmap_size))
-        uint64_t[new_delta_bitmap_size]();
-    AlexKey<T>* new_delta_idx =
-        new AlexKey<T>[new_delta_idx_capacity]();
-    P* new_delta_idx_payloads = new (payload_allocator().allocate(new_delta_idx_capacity))
-        P[new_delta_idx_capacity];
-
+  void generate_new_delta_idx(uint64_t worker_id) {
     if (delta_idx_ == nullptr) {
 #if DEBUG_PRINT
       coutLock.lock();
       std::cout << "t" << worker_id << " - making delta_idx_" << std::endl;
       coutLock.unlock();
 #endif
-      pthread_rwlock_wrlock(&delta_index_rw_lock_); //prevent reading in delta index before preparation
-      delta_num_keys_ = 0;
-      delta_idx_capacity_ = new_delta_idx_capacity;
-      delta_idx_model_ = this->model_;
-      delta_bitmap_ = new_delta_bitmap;
-      delta_bitmap_size_ = new_delta_bitmap_size;
-      delta_idx_payloads_ = new_delta_idx_payloads;
+      delta_idx_type *new_delta_idx = new DeltaIndex<T, P>();
+      memory_fence();
       delta_idx_ = new_delta_idx;
-      for (int i = 0; i < delta_idx_capacity_; ++i) {
-        delta_idx_[i] = kEndSentinel_;
-      }
+      memory_fence();
       node_status_ = INSERT_AT_DELTA;
-      pthread_rwlock_unlock(&delta_index_rw_lock_);
     }
     else {
 #if DEBUG_PRINT
@@ -1816,19 +1670,11 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       std::cout << "t" << worker_id << " - making tmp_delta_idx_" << std::endl;
       coutLock.unlock();
 #endif
-      pthread_rwlock_wrlock(&tmp_delta_index_rw_lock_); //prevent reading in temporary delta index before preparation
-      tmp_delta_num_keys_ = 0;
-      tmp_delta_idx_capacity_ = new_delta_idx_capacity;
-      tmp_delta_idx_model_ = this->model_;
-      tmp_delta_bitmap_ = new_delta_bitmap;
-      tmp_delta_bitmap_size_ = new_delta_bitmap_size;
-      tmp_delta_idx_payloads_ = new_delta_idx_payloads;
+      delta_idx_type *new_delta_idx = new DeltaIndex<T, P>();
+      memory_fence();
       tmp_delta_idx_ = new_delta_idx;
-      for (int i = 0; i < tmp_delta_idx_capacity_; ++i) {
-        tmp_delta_idx_[i] = kEndSentinel_;
-      }
+      memory_fence();
       node_status_ = INSERT_AT_TMPDELTA;
-      pthread_rwlock_unlock(&tmp_delta_index_rw_lock_);
     }
 #if DEBUG_PRINT
     coutLock.lock();
@@ -1853,42 +1699,30 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       std::cout << "t" << worker_id << "'s generated thread - leaved delta_index_" << std::endl;
       coutLock.unlock();
 #endif
+      memory_fence();
       node_status_ = INSERT_AT_DATA;
+      memory_fence();
       pthread_mutex_unlock(&insert_mutex_);
     }
     else {
       //need to move tmp_delta_idx_ to delta_idx_.
       //don't read from delta index while moving
       //it could use wrong metadata to iterate through delta index
-      pthread_rwlock_wrlock(&delta_index_rw_lock_);
 
       //don't read from temporary delta index while moving
       //it could use wrong metadata to iterate through temporary delta index
-      pthread_rwlock_wrlock(&tmp_delta_index_rw_lock_);
 
       //temporary saving
-      auto old_delta_idx_ = delta_idx_;
-      auto old_delta_bitmap_ = delta_bitmap_;
-      auto old_delta_payloads_ = delta_idx_payloads_;
+      delta_idx_type *old_delta_idx_ = delta_idx_;
 
       //copying
       delta_idx_ = tmp_delta_idx_;
-      delta_bitmap_ = tmp_delta_bitmap_;
-      delta_idx_payloads_ = tmp_delta_idx_payloads_;
-      delta_idx_capacity_ = tmp_delta_idx_capacity_;
-      delta_num_keys_ = tmp_delta_num_keys_;
-      delta_bitmap_size_ = tmp_delta_bitmap_size_;
-      delta_idx_model_ = tmp_delta_idx_model_;
 
       //cleaning
-      tmp_delta_idx_ = nullptr;
-      tmp_delta_bitmap_ = nullptr;
-      tmp_delta_idx_payloads_ = nullptr;
-      tmp_delta_bitmap_size_ = 0;
-      tmp_delta_idx_capacity_ = 0;
+      memory_fence();
       node_status_ = INSERT_AT_DATA;
-      pthread_rwlock_unlock(&tmp_delta_index_rw_lock_);
-      pthread_rwlock_unlock(&delta_index_rw_lock_);
+      tmp_delta_idx_ = nullptr;
+      memory_fence();
       pthread_mutex_unlock(&insert_mutex_);
 
       if (child_just_splitted_) {//if it's sharing delta index
@@ -1912,9 +1746,8 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
           reused_delta_idx_cnt_ = nullptr;
         }
       }
-      delete[] old_delta_idx_;
-      delete[] old_delta_bitmap_;
-      delete[] old_delta_payloads_;
+      rcu_barrier(); //in case of some reading threads
+      delete old_delta_idx_;
 #if DEBUG_PRINT
       coutLock.lock();
       std::cout << "t" << worker_id << "'s generated thread - deleted old delta index" << std::endl;
@@ -1940,6 +1773,23 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     return shifts_per_insert() > 100 || expected_avg_shifts_ > 100;
   }
 
+  bool it_is_smaller(const_iterator_type &it, 
+                     delta_key_iterator_type &delta_it) const {
+#if DEBUG_PRINT
+    alex::coutLock.lock();
+    std::cout << "it_is_smaller related metadata" << '\n';
+    std::cout << delta_it.cur_node_ << '\n';
+    std::cout << delta_it.cur_idx_ << '\n';
+    alex::coutLock.unlock();
+#endif
+    if (it.is_end()) return false;
+    if (delta_it.is_end()) return true;
+    assert(it.key().key_arr_ != nullptr);
+    assert(delta_it.key().key_arr_ != nullptr);
+    if (it.node_->key_less(it.key(), delta_it.key())) return true;
+    return false;
+  }
+
   // First pair's first value in returned pair is fail flag:
   // 0 if successful insert , maybe with automatic expansion.
   // 1 if no insert because of significant cost deviation.
@@ -1947,7 +1797,6 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // 3 if no insert because node is at max capacity.
   // 4 if we should expand.
   // 5 if we must expand because capacity is full in key_slots_ 
-  // 6 if delta_index_ || tmp_delta_index_ is full making insert impossible.
   // -1 if key already exists and duplicates not allowed.
   //
   // First pair's second value in returned pair is position of inserted key, or of the
@@ -1967,9 +1816,15 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     if (node_status_ == INSERT_AT_DATA) {
       return insert_at_data(key, payload, worker_id);
     }
-    else {
-      return insert_at_delta(key, payload, worker_id, node_status_);
+    else if (node_status_ == INSERT_AT_DELTA) {
+      int success = delta_idx_->insert(key, payload);
+      return {{success, 0}, {this, nullptr}};
     }
+    else if (node_status_ == INSERT_AT_TMPDELTA) {
+      int success = tmp_delta_idx_->insert(key, payload);
+      return {{success, 0}, {this, nullptr}};
+    }
+    else {abort();}
   }
 
   //case of insertion in key_slots_
@@ -2026,87 +1881,75 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     return {{0, insertion_position}, {this, nullptr}};
   }
 
-  //case of insertion in delta_idx_ / tmp_delta_idx_
-  //should succeed, or fail because of full capacity
-  std::pair<std::pair<int, int>, std::pair<self_type *, self_type *>> insert_at_delta(
-    const AlexKey<T>& key, const P& payload, uint64_t worker_id, int node_status) {
-#if DEBUG_PRINT
-    alex::coutLock.lock();
-    std::cout << "t" << worker_id << " - ";
-    std::cout << "alex_nodes.h insert : inserting to delta_index_" << std::endl;
-    alex::coutLock.unlock();
-#endif
-    int insertion_position = -1;
-    AlexKey<T> *ref_arr;
-    int ref_capacity;
-    switch(node_status) {
-      case INSERT_AT_DELTA:
-        ref_arr = delta_idx_;
-        ref_capacity = delta_idx_capacity_;
-        break;
-      case INSERT_AT_TMPDELTA:
-        ref_arr = tmp_delta_idx_;
-        ref_capacity = tmp_delta_idx_capacity_;
-        break;
-      default:
-        ref_arr = delta_idx_;
-        ref_capacity = delta_idx_capacity_;
-        break;
-    }
-
-    if (node_status == INSERT_AT_DELTA) {
-      if (delta_num_keys_ == delta_idx_capacity_) {
-#if DEBUG_PRINT
-        alex::coutLock.lock();
-        std::cout << "t" << worker_id << " - ";
-        std::cout << "alex_nodes.h insert : failed inserting to delta_index_ because it's full" << std::endl;
-        alex::coutLock.unlock();
-#endif
-        return {{6, 0}, {this, nullptr}};
-      }
-      delta_num_keys_++;
-    }
-    else {
-      if (tmp_delta_num_keys_ == tmp_delta_idx_capacity_) {
-#if DEBUG_PRINT
-        alex::coutLock.lock();
-        std::cout << "t" << worker_id << " - ";
-        std::cout << "alex_nodes.h insert : failed inserting to tmp_delta_index_ because it's full" << std::endl;
-        alex::coutLock.unlock();
-#endif
-        return {{6, 0}, {this, nullptr}};
-      }
-      tmp_delta_num_keys_++;
-    }
-    std::pair<int, int> positions = find_insert_position(key, ref_arr, ref_capacity, node_status, worker_id);
-    int upper_bound_pos = positions.second;
-    if (!allow_duplicates && upper_bound_pos > 0 &&
-        key_equal(ref_arr[upper_bound_pos - 1], key)) {
-      return {{-1, upper_bound_pos - 1}, {this, nullptr}};
-    }
-    insertion_position = positions.first;
-    if (insertion_position < ref_capacity &&
-        !check_exists(insertion_position, node_status)) {
-      insert_element_at(key, payload, insertion_position, worker_id, 1, node_status);
-    } else {
-      insertion_position =
-          insert_using_shifts(key, payload, insertion_position, worker_id, node_status);
-    }
-    
-    return {{0, insertion_position}, {this, nullptr}};
-  }
-
   //helper for resize
   //actual insert of resize happens here
-  void resize_insert(P* new_payload_slots, uint64_t *new_bitmap, AlexKey<T> *new_key_slots, 
+  void resize_insert_node_only(P* new_payload_slots, uint64_t *new_bitmap, AlexKey<T> *new_key_slots, 
                      LinearModel<T> &new_model, int keys_remaining, int new_data_capacity,
-                     const_iterator_type it, const_iterator_type delta_it) {
+                     const_iterator_type &it) {
     AlexKey<T> key;
     P payload;
     int last_position = -1;
 
     while (keys_remaining > 0) {
-      if (it.is_smaller(delta_it)) {
+      key = it.key();
+      payload = it.payload();
+      it++;
+
+      int position = new_model.predict(key);
+      position = std::max<int>(position, last_position + 1);
+
+      int positions_remaining = new_data_capacity - position;
+      if (positions_remaining < keys_remaining) {
+        // fill the rest of the store contiguously
+        int pos = new_data_capacity - keys_remaining;
+        for (int j = last_position + 1; j < pos; j++) {
+          new_key_slots[j] = key;
+        }
+        if (pos < new_data_capacity) {
+          new_key_slots[pos] = key;
+          new_payload_slots[pos] = payload;
+          set_bit(new_bitmap, pos);
+          pos++;
+        } else {break;}
+        for (; pos < new_data_capacity; pos++) {
+          key = it.key();
+          payload = it.payload();
+          it++;
+          new_key_slots[pos] = key;
+          new_payload_slots[pos] = payload;
+          set_bit(new_bitmap, pos);
+        }
+        last_position = pos - 1;
+        break;
+      }
+
+      for (int j = last_position + 1; j < position; j++) {
+        new_key_slots[j] = key;
+      }
+
+      new_key_slots[position] = key;
+      new_payload_slots[position] = payload;
+      set_bit(new_bitmap, position);
+
+      last_position = position;
+
+      keys_remaining--;
+    }
+
+    for (int i = last_position + 1; i < new_data_capacity; i++) {
+      new_key_slots[i] = kEndSentinel_;
+    }
+  }
+
+  void resize_insert_with_delta(P* new_payload_slots, uint64_t *new_bitmap, AlexKey<T> *new_key_slots, 
+                     LinearModel<T> &new_model, int keys_remaining, int new_data_capacity,
+                     const_iterator_type &it, delta_key_iterator_type &delta_it) {
+    AlexKey<T> key;
+    P payload;
+    int last_position = -1;
+
+    while (keys_remaining > 0) {
+      if (it_is_smaller(it, delta_it)) {
         key = it.key();
         payload = it.payload();
         it++;
@@ -2114,7 +1957,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       else {
         key = delta_it.key();
         payload = delta_it.payload();
-        delta_it++;
+        delta_it.next();
       }
 
       int position = new_model.predict(key);
@@ -2134,7 +1977,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
           pos++;
         } else {break;}
         for (; pos < new_data_capacity; pos++) {
-          if (it.is_smaller(delta_it)) {
+          if (it_is_smaller(it, delta_it)) {
             key = it.key();
             payload = it.payload();
             it++;
@@ -2142,7 +1985,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
           else {
             key = delta_it.key();
             payload = delta_it.payload();
-            delta_it++;
+            delta_it.next();
           }
           new_key_slots[pos] = key;
           new_payload_slots[pos] = payload;
@@ -2181,22 +2024,22 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     int last_delta_num_keys = 0;
     if (child_just_splitted_) {
       if (was_left_child_) {
-        const_iterator_type it(this, 0, true);
-        while (!it.is_end() && it.cur_idx_ < boundary_base_key_idx_) {
-          it++;
+        delta_key_iterator_type it(delta_idx_);
+        while (!it.is_end() && it.key() < boundary_base_key_) {
+          it.next();
           last_delta_num_keys++;
         }
       }
       else {
-        const_iterator_type it(this, boundary_base_key_idx_, true);
+        delta_key_iterator_type it(delta_idx_, &boundary_base_key_);
         while (!it.is_end()) {
-          it++;
+          it.next();
           last_delta_num_keys++;
         }
       }
     }
     else {
-      last_delta_num_keys = node_status_ == INSERT_AT_DELTA ? 0 : delta_num_keys_;
+      last_delta_num_keys = node_status_ == INSERT_AT_DELTA ? 0 : delta_idx_->tot_key_n_;
     }
 
     int total_num_keys = last_delta_num_keys + num_keys_;
@@ -2232,21 +2075,22 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
     }
 
     int keys_remaining = total_num_keys;
-    int delta_start_idx;
-    if (child_just_splitted_ && was_right_child_) {delta_start_idx = boundary_base_key_idx_;}
-    else {delta_start_idx = 0;}
 
     const_iterator_type it(this, 0);
     if (node_status_ == INSERT_AT_DELTA) {
-      const_iterator_type delta_it(this);
-      delta_it.cur_idx_ = -1;
-      resize_insert(new_payload_slots, new_bitmap, new_key_slots, new_model,
-                    keys_remaining, new_data_capacity, it, delta_it);
+      resize_insert_node_only(new_payload_slots, new_bitmap, new_key_slots, new_model,
+                    keys_remaining, new_data_capacity, it);
     }
     else if (node_status_ == INSERT_AT_TMPDELTA) {
-      const_iterator_type delta_it(this, delta_start_idx, true);
-      resize_insert(new_payload_slots, new_bitmap, new_key_slots, new_model,
+      if (child_just_splitted_ && was_right_child_) {
+        delta_key_iterator_type delta_it(delta_idx_, &boundary_base_key_);
+        resize_insert_with_delta(new_payload_slots, new_bitmap, new_key_slots, new_model,
                     keys_remaining, new_data_capacity, it, delta_it);
+      } else {
+        delta_key_iterator_type delta_it(delta_idx_);
+        resize_insert_with_delta(new_payload_slots, new_bitmap, new_key_slots, new_model,
+                    keys_remaining, new_data_capacity, it, delta_it);
+      }
     }
     else {std::cout << "error on resize" << std::endl; abort();} //shouldn't happen
 
@@ -2292,51 +2136,28 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // mode 0 : rw_lock already obtained, no need for another write wait (for insert_using_shifts)
   // mode 1 : rw_lock not obtained, need to do write wait (for other use cases)
   void insert_element_at(const AlexKey<T>& key, P payload, int pos, 
-                         uint64_t worker_id, int mode = 0, int node_status = 0) {
+                         uint64_t worker_id, int mode = 0) {
 #if PROFILE
     auto insert_element_at_start_time = std::chrono::high_resolution_clock::now();
 #endif
-    AlexKey<T> *ref_key_arr;
-    P* ref_payload_arr;
-    pthread_rwlock_t *ref_rwlock;
-    uint64_t *ref_bitmap;
-    switch(node_status) {
-      case INSERT_AT_DELTA:
-        ref_key_arr = delta_idx_;
-        ref_payload_arr = delta_idx_payloads_;
-        ref_rwlock = &delta_index_rw_lock_;
-        ref_bitmap = delta_bitmap_;
-        break;
-      case INSERT_AT_TMPDELTA:
-        ref_key_arr = tmp_delta_idx_;
-        ref_payload_arr = tmp_delta_idx_payloads_;
-        ref_rwlock = &tmp_delta_index_rw_lock_;
-        ref_bitmap = tmp_delta_bitmap_;
-        break;
-      default:
-        ref_key_arr = key_slots_;
-        ref_payload_arr = payload_slots_;
-        ref_rwlock = &key_array_rw_lock_;
-        ref_bitmap = bitmap_;
-    }
     if (mode == 1) {
 #if PROFILE
       profileStats.insert_element_at_call_cnt[worker_id]++;
 #endif
-      pthread_rwlock_wrlock(ref_rwlock); //synchronization
+      pthread_rwlock_wrlock(&key_array_rw_lock_); //synchronization
     }
-    ref_key_arr[pos] = key;
-    ref_payload_arr[pos] = payload;
-    set_bit(ref_bitmap, pos);
+    key_slots_[pos] = key;
+    payload_slots_[pos] = payload;
+    set_bit(bitmap_, pos);
 
     // Overwrite preceding gaps until we reach the previous element
     pos--;
-    while (pos >= 0 && !check_exists(pos, node_status)) {
-      ref_key_arr[pos] = key;
+    while (pos >= 0 && !check_exists(pos)) {
+      key_slots_[pos] = key;
       pos--;
     }
     if (mode == 1) {
-      pthread_rwlock_unlock(ref_rwlock);
+      pthread_rwlock_unlock(&key_array_rw_lock_);
 #if PROFILE
       auto insert_element_at_end_time = std::chrono::high_resolution_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::fgTimeUnit>(insert_element_at_end_time - insert_element_at_start_time).count();
@@ -2352,53 +2173,22 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
   // Insert key into pos, shifting as necessary in the range [left, right)
   // Returns the actual position of insertion
   int insert_using_shifts(const AlexKey<T>& key, P payload, int pos, 
-                          uint64_t worker_id, int node_status = 0) {
+                          uint64_t worker_id) {
     // Find the closest gap
 #if PROFILE
     profileStats.insert_using_shifts_call_cnt[worker_id]++;
     auto insert_using_shifts_start_time = std::chrono::high_resolution_clock::now();
 #endif
-    AlexKey<T> *ref_key_arr;
-    P* ref_payload_arr;
-    int ref_capacity;
-    pthread_rwlock_t *ref_rwlock;
-    uint64_t *ref_bitmap;
-    int ref_bitmap_size;
-    switch(node_status) {
-      case INSERT_AT_DELTA:
-        ref_key_arr = delta_idx_;
-        ref_payload_arr = delta_idx_payloads_;
-        ref_capacity = delta_idx_capacity_;
-        ref_rwlock = &delta_index_rw_lock_;
-        ref_bitmap = delta_bitmap_;
-        ref_bitmap_size = delta_bitmap_size_;
-        break;
-      case INSERT_AT_TMPDELTA:
-        ref_key_arr = tmp_delta_idx_;
-        ref_payload_arr = tmp_delta_idx_payloads_;
-        ref_capacity = tmp_delta_idx_capacity_;
-        ref_rwlock = &tmp_delta_index_rw_lock_;
-        ref_bitmap = tmp_delta_bitmap_;
-        ref_bitmap_size = tmp_delta_bitmap_size_;
-        break;
-      default:
-        ref_key_arr = key_slots_;
-        ref_payload_arr = payload_slots_;
-        ref_capacity = data_capacity_;
-        ref_rwlock = &key_array_rw_lock_;
-        ref_bitmap = bitmap_;
-        ref_bitmap_size = bitmap_size_;
-    }
-    int gap_pos = closest_gap(pos, ref_capacity, ref_bitmap, ref_bitmap_size);
-    set_bit(ref_bitmap, gap_pos);
-    pthread_rwlock_wrlock(ref_rwlock); //for synchronization.
+    int gap_pos = closest_gap(pos);
+    set_bit(gap_pos);
+    pthread_rwlock_wrlock(&key_array_rw_lock_); //for synchronization.
     if (gap_pos >= pos) {
       for (int i = gap_pos; i > pos; i--) {
-        ref_key_arr[i] = ref_key_arr[i-1];
-        ref_payload_arr[i] = ref_payload_arr[i-1];
+        key_slots_[i] = key_slots_[i-1];
+        payload_slots_[i] = payload_slots_[i-1];
       }
-      insert_element_at(key, payload, pos, worker_id, 0, node_status);
-      pthread_rwlock_unlock(ref_rwlock);
+      insert_element_at(key, payload, pos, worker_id, 0);
+      pthread_rwlock_unlock(&key_array_rw_lock_);
       num_shifts_ += gap_pos - pos;
 #if PROFILE
       auto insert_using_shifts_end_time = std::chrono::high_resolution_clock::now();
@@ -2412,14 +2202,11 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       return pos;
     } else {
       for (int i = gap_pos; i < pos - 1; i++) {
-        if (ref_key_arr[i+1].key_arr_ == nullptr) {
-          std::cout << "node status : " << node_status << std::endl;
-        }
-        ref_key_arr[i] = ref_key_arr[i+1];
-        ref_payload_arr[i] = ref_payload_arr[i+1];
+        key_slots_[i] = key_slots_[i+1];
+        payload_slots_[i] = payload_slots_[i+1];
       }
-      insert_element_at(key, payload, pos - 1, worker_id, 0, node_status);
-      pthread_rwlock_unlock(ref_rwlock);
+      insert_element_at(key, payload, pos - 1, worker_id, 0);
+      pthread_rwlock_unlock(&key_array_rw_lock_);
       num_shifts_ += pos - gap_pos - 1;
 #if PROFILE
       auto insert_using_shifts_end_time = std::chrono::high_resolution_clock::now();
@@ -2437,30 +2224,26 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
 #if ALEX_USE_LZCNT
   // Returns position of closest gap to pos
   // Returns pos if pos is a gap
-  int closest_gap(int pos) {
-    return closest_gap(pos, data_capacity_, bitmap_, bitmap_size_);
-  }
-
-  int closest_gap(int pos, int ref_capacity, uint64_t *ref_bitmap, int ref_bitmap_size) const {
-    pos = std::min(pos, ref_capacity - 1);
+  int closest_gap(int pos) const {
+    pos = std::min(pos, data_capacity_ - 1);
     int bitmap_pos = pos >> 6;
     int bit_pos = pos - (bitmap_pos << 6);
-    if (ref_bitmap[bitmap_pos] == static_cast<uint64_t>(-1) ||
-        (bitmap_pos == ref_bitmap_size - 1 &&
-         _mm_popcnt_u64(ref_bitmap[bitmap_pos]) ==
-             ref_capacity - ((ref_bitmap_size - 1) << 6))) {
+    if (bitmap_[bitmap_pos] == static_cast<uint64_t>(-1) ||
+        (bitmap_pos == bitmap_size_ - 1 &&
+         _mm_popcnt_u64(bitmap_[bitmap_pos]) ==
+             data_capacity_ - ((bitmap_size_ - 1) << 6))) {
       // no gaps in this block of 64 positions, start searching in adjacent
       // blocks
       int left_bitmap_pos = 0;
-      int right_bitmap_pos = ((ref_capacity - 1) >> 6);  // inclusive
+      int right_bitmap_pos = ((data_capacity_ - 1) >> 6);  // inclusive
       int max_left_bitmap_offset = bitmap_pos - left_bitmap_pos;
       int max_right_bitmap_offset = right_bitmap_pos - bitmap_pos;
       int max_bidirectional_bitmap_offset =
           std::min<int>(max_left_bitmap_offset, max_right_bitmap_offset);
       int bitmap_distance = 1;
       while (bitmap_distance <= max_bidirectional_bitmap_offset) {
-        uint64_t left_bitmap_data = ref_bitmap[bitmap_pos - bitmap_distance];
-        uint64_t right_bitmap_data = ref_bitmap[bitmap_pos + bitmap_distance];
+        uint64_t left_bitmap_data = bitmap_[bitmap_pos - bitmap_distance];
+        uint64_t right_bitmap_data = bitmap_[bitmap_pos + bitmap_distance];
         if (left_bitmap_data != static_cast<uint64_t>(-1) &&
             right_bitmap_data != static_cast<uint64_t>(-1)) {
           int left_gap_pos = ((bitmap_pos - bitmap_distance + 1) << 6) -
@@ -2469,7 +2252,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
           int right_gap_pos = ((bitmap_pos + bitmap_distance) << 6) +
                               static_cast<int>(_tzcnt_u64(~right_bitmap_data));
           if (pos - left_gap_pos <= right_gap_pos - pos ||
-              right_gap_pos >= ref_capacity) {
+              right_gap_pos >= data_capacity_) {
             return left_gap_pos;
           } else {
             return right_gap_pos;
@@ -2479,15 +2262,15 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
                              static_cast<int>(_lzcnt_u64(~left_bitmap_data)) -
                              1;
           // also need to check next block to the right
-          if (bit_pos > 32 && bitmap_pos + bitmap_distance + 1 < ref_bitmap_size &&
-              ref_bitmap[bitmap_pos + bitmap_distance + 1] !=
+          if (bit_pos > 32 && bitmap_pos + bitmap_distance + 1 < bitmap_size_ &&
+              bitmap_[bitmap_pos + bitmap_distance + 1] !=
                   static_cast<uint64_t>(-1)) {
             int right_gap_pos =
                 ((bitmap_pos + bitmap_distance + 1) << 6) +
                 static_cast<int>(
-                    _tzcnt_u64(~ref_bitmap[bitmap_pos + bitmap_distance + 1]));
+                    _tzcnt_u64(~bitmap_[bitmap_pos + bitmap_distance + 1]));
             if (pos - left_gap_pos <= right_gap_pos - pos ||
-                right_gap_pos >= ref_capacity) {
+                right_gap_pos >= data_capacity_) {
               return left_gap_pos;
             } else {
               return right_gap_pos;
@@ -2498,18 +2281,18 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
         } else if (right_bitmap_data != static_cast<uint64_t>(-1)) {
           int right_gap_pos = ((bitmap_pos + bitmap_distance) << 6) +
                               static_cast<int>(_tzcnt_u64(~right_bitmap_data));
-          if (right_gap_pos < ref_capacity) {
+          if (right_gap_pos < data_capacity_) {
             // also need to check next block to the left
             if (bit_pos < 32 && bitmap_pos - bitmap_distance > 0 &&
-                ref_bitmap[bitmap_pos - bitmap_distance - 1] !=
+                bitmap_[bitmap_pos - bitmap_distance - 1] !=
                     static_cast<uint64_t>(-1)) {
               int left_gap_pos =
                   ((bitmap_pos - bitmap_distance) << 6) -
                   static_cast<int>(
-                      _lzcnt_u64(~ref_bitmap[bitmap_pos - bitmap_distance - 1])) -
+                      _lzcnt_u64(~bitmap_[bitmap_pos - bitmap_distance - 1])) -
                   1;
               if (pos - left_gap_pos <= right_gap_pos - pos ||
-                  right_gap_pos >= ref_capacity) {
+                  right_gap_pos >= data_capacity_) {
                 return left_gap_pos;
               } else {
                 return right_gap_pos;
@@ -2523,17 +2306,17 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       }
       if (max_left_bitmap_offset > max_right_bitmap_offset) {
         for (int i = bitmap_pos - bitmap_distance; i >= left_bitmap_pos; i--) {
-          if (ref_bitmap[i] != static_cast<uint64_t>(-1)) {
-            return ((i + 1) << 6) - static_cast<int>(_lzcnt_u64(~ref_bitmap[i])) -
+          if (bitmap_[i] != static_cast<uint64_t>(-1)) {
+            return ((i + 1) << 6) - static_cast<int>(_lzcnt_u64(~bitmap_[i])) -
                    1;
           }
         }
       } else {
         for (int i = bitmap_pos + bitmap_distance; i <= right_bitmap_pos; i++) {
-          if (ref_bitmap[i] != static_cast<uint64_t>(-1)) {
+          if (bitmap_[i] != static_cast<uint64_t>(-1)) {
             int right_gap_pos =
-                (i << 6) + static_cast<int>(_tzcnt_u64(~ref_bitmap[i]));
-            if (right_gap_pos >= ref_capacity) {
+                (i << 6) + static_cast<int>(_tzcnt_u64(~bitmap_[i]));
+            if (right_gap_pos >= data_capacity_) {
               return -1;
             } else {
               return right_gap_pos;
@@ -2544,7 +2327,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       return -1;
     } else {
       // search within block of 64 positions
-      uint64_t bitmap_data = ref_bitmap[bitmap_pos];
+      uint64_t bitmap_data = bitmap_[bitmap_pos];
       int closest_right_gap_distance = 64;
       int closest_left_gap_distance = 64;
       // Logically gaps to the right of pos, in the bitmap these are gaps to the
@@ -2556,10 +2339,10 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       if (bitmap_right_gaps != 0) {
         closest_right_gap_distance =
             static_cast<int>(_tzcnt_u64(bitmap_right_gaps)) - bit_pos;
-      } else if (bitmap_pos + 1 < ref_bitmap_size) {
+      } else if (bitmap_pos + 1 < bitmap_size_) {
         // look in the next block to the right
         closest_right_gap_distance =
-            64 + static_cast<int>(_tzcnt_u64(~ref_bitmap[bitmap_pos + 1])) -
+            64 + static_cast<int>(_tzcnt_u64(~bitmap_[bitmap_pos + 1])) -
             bit_pos;
       }
       // Logically gaps to the left of pos, in the bitmap these are gaps to the
@@ -2573,12 +2356,12 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       } else if (bitmap_pos > 0) {
         // look in the next block to the left
         closest_left_gap_distance =
-            bit_pos + static_cast<int>(_lzcnt_u64(~ref_bitmap[bitmap_pos - 1])) +
+            bit_pos + static_cast<int>(_lzcnt_u64(~bitmap_[bitmap_pos - 1])) +
             1;
       }
 
       if (closest_right_gap_distance < closest_left_gap_distance &&
-          pos + closest_right_gap_distance < ref_capacity) {
+          pos + closest_right_gap_distance < data_capacity_) {
         return pos + closest_right_gap_distance;
       } else {
         return pos - closest_left_gap_distance;

@@ -95,23 +95,20 @@ public:
         return childrens_[this->find_first_larger_than(key)];
     }
 
-    //[begin, end] -> [begin+1, end+1]
-    void shift_by_one(int begin, int end) {
-        assert(end < this->key_n_ && end < (node_capacity - 1));
-        for (int i = end; i >= begin; --i) {
-            this->keys_[i+1] = this->keys_[i];
+    //[begin, key_n_-1] -> [begin+1, key_n_] (according to children)
+    //ran before update of key_n_++.
+    void shift_by_one_childrens(int begin) {
+        //children index is always 1 larger than key_n_.
+        assert(begin <= this->key_n_ + 1);
+        for (int i = this->key_n_; i >= begin; --i) {
             childrens_[i+1] = childrens_[i];
             childrens_[i+1]->pos_in_childrens_ = i+1;
         }
     }
 
-    //[begin, key_n_-1] -> [begin+1, key_n_]
-    void shift_by_one(int begin) {
-        assert(begin < this->key_n_);
+    void shift_by_one_keys(int begin) {
         for (int i = this->key_n_ - 1; i >= begin; --i) {
             this->keys_[i+1] = this->keys_[i];
-            childrens_[i+1] = childrens_[i];
-            childrens_[i+1]->pos_in_childrens_ = i+1;
         }
     }
 };
@@ -146,7 +143,7 @@ public:
         }
     }
     void shift_by_one(int begin) {
-        assert(begin < this->key_n_);
+        assert(begin <= this->key_n_);
         for (int i = this->key_n_ - 1; i >= begin; --i) {
             this->keys_[i+1] = this->keys_[i];
             payloads_[i+1] = payloads_[i];
@@ -216,7 +213,7 @@ public:
     public:
         delta_index_t *index_ = nullptr;
         leaf_t* cur_node_ = nullptr;
-        uint8_t cur_idx_ = -1;
+        int8_t cur_idx_ = -1;
 
         DeltaKeyIterator(delta_index_t* index)
             : index_(index), cur_node_(index->leaf_begin_->next_leaf_) {
@@ -224,6 +221,7 @@ public:
             else {cur_idx_ = 0;}
         }
 
+        //iterator which starts at pos of key larger than or equal to parameter key.
         DeltaKeyIterator(delta_index_t* index, AlexKey<T>*key)
             : index_(index) {
             if (index_->tot_key_n_ == 0) {
@@ -234,6 +232,7 @@ public:
             } else {
                 cur_node_ = index->find_leaf(*key);
                 cur_idx_ = cur_node_->find_first_larger_than_or_equal_to(*key);
+                if (cur_idx_ >= cur_node_->key_n_) {cur_idx_ = -1;} //larger than any key.
             }
         }
 
@@ -262,12 +261,6 @@ public:
             }
         }
 
-        void reinit() {
-            cur_node_ = index_->leaf_begin_;
-            if (cur_node_->key_n_ != 0) {cur_idx_ = 0;}
-            else {cur_idx_ = -1;}
-        }
-
         bool is_end() {
             return cur_idx_ == -1;
         }
@@ -290,6 +283,8 @@ public:
         leaf_begin_ = create_leaf(nullptr);
         leaf_begin_->next_leaf_ = static_cast<leaf_t *>(root_node_);
         leaf_begin_->prev_leaf_ = nullptr;
+        static_cast<leaf_t*>(root_node_)->prev_leaf_ = leaf_begin_;
+        static_cast<leaf_t*>(root_node_)->next_leaf_ = nullptr;
     }
     ~DeltaIndex() {
         for (DeltaNodeIterator node_it = DeltaNodeIterator(this); !node_it.is_end();
@@ -322,6 +317,12 @@ public:
     //inserts
     //0 : succeed
     int insert(const AlexKey<T> &key, P payload) {
+#if DEBUG_PRINT_DIDX
+        alex::coutLock.lock();
+        std::cout << "delta_index_ : " << this << '\n';
+        std::cout << "requested insert for " << key.key_arr_ << '\n' << std::endl;
+        alex::coutLock.unlock();
+#endif
         leaf_t *target_leaf = find_leaf(key);
         uint8_t pos = target_leaf->find_first_larger_than_or_equal_to(key);
         pthread_rwlock_wrlock(&delta_index_rw_lock_);
@@ -339,6 +340,13 @@ public:
             target_leaf->key_n_++;
             tot_key_n_++;
         } else {abort();} //shouldn't happen.
+
+#if DEBUG_PRINT_DIDX
+        alex::coutLock.lock();
+        std::cout << "delta_index_ : " << this << '\n';
+        std::cout << "key_n_ is " << (int) target_leaf->key_n_ << '\n' << std::endl;
+        alex::coutLock.unlock();
+#endif
 
         if (target_leaf->key_n_ == node_capacity) { //node on limit.
             split(target_leaf);
@@ -387,10 +395,22 @@ public:
 
     //splitting procedure
     void split(leaf_t *target_leaf) {
+#if DEBUG_PRINT_DIDX
+        alex::coutLock.lock();
+        std::cout << "delta_index_ : " << this << '\n';
+        std::cout << "split starts " << '\n' << std::endl;
+        alex::coutLock.unlock();
+#endif
         node_t *target_node = static_cast<node_t*>(target_leaf);
         internal_t *parent;
         while (true) { //recursive splitting
-
+#if DEBUG_PRINT_DIDX
+            alex::coutLock.lock();
+            std::cout << "delta_index_ : " << this << '\n';
+            std::cout << "target_node : " << target_node <<'\n';
+            std::cout << "target_node key_n_ : " << (int) target_node->key_n_ << '\n' << std::endl;
+            alex::coutLock.unlock();
+#endif
             if (target_node->parent_ == nullptr) {
                 //this should be the last iteration.
                 assert(target_node == root_node_);
@@ -409,6 +429,12 @@ public:
                 leaf_t *right_leaf = create_leaf(parent);
 
                 if (parent->key_n_ == 0) {
+#if DEBUG_PRINT_DIDX
+                    alex::coutLock.lock();
+                    std::cout << "delta_index_ : " << this << '\n';
+                    std::cout << "new parent for data node" << '\n' << std::endl;;
+                    alex::coutLock.unlock();
+#endif   
                     //new parent.
                     parent->key_n_++;
                     parent->childrens_[0] = left_leaf;
@@ -421,15 +447,23 @@ public:
                     //existing parent
                     //we first need to find the position of leaf that's begin splitted
                     //in that parent.
-                    parent->key_n_++;
                     uint8_t target_pos_in_children = target_leaf->pos_in_childrens_;
-                    
+#if DEBUG_PRINT_DIDX
+                    alex::coutLock.lock();
+                    std::cout << "delta_index_ : " << this << '\n';
+                    std::cout << "splitting data node" << '\n';
+                    std::cout << "target_pos_in_children : " << (int) target_pos_in_children <<'\n';
+                    std::cout << "parent key_n_ : " << (int) parent->key_n_ << '\n' << std::endl;                    
+                    alex::coutLock.unlock();
+#endif                    
                     //1. shift childrens_ and keys_ by one
                     //shift start pos is right next to the pos where target existed
-                    parent->shift_by_one(target_pos_in_children + 1);
+                    parent->shift_by_one_childrens(target_pos_in_children + 1);
+                    parent->shift_by_one_keys(target_pos_in_children);
+                    parent->key_n_++;
                     
                     //2. there will be a new space in keys_. put middle key there.
-                    parent->keys_[target_pos_in_children + 1] = target_leaf->keys_[left_half_cnt];
+                    parent->keys_[target_pos_in_children] = target_leaf->keys_[left_half_cnt];
 
                     //3. update childrens_ with left_leaf and right_leaf
                     parent->childrens_[target_pos_in_children] = left_leaf;
@@ -472,6 +506,12 @@ public:
 
                 if (parent->key_n_ == 0) {
                     //new parent.
+#if DEBUG_PRINT_DIDX
+                    alex::coutLock.lock();
+                    std::cout << "delta_index_ : " << this << '\n';
+                    std::cout << "new parent for internal node" << '\n' << std::endl;;
+                    alex::coutLock.unlock();
+#endif  
                     parent->key_n_++;
                     parent->childrens_[0] = left_internal;
                     parent->childrens_[1] = right_internal;
@@ -483,15 +523,25 @@ public:
                     //existing parent
                     //we first need to find the position of leaf that's begin splitted
                     //in that parent.
-                    parent->key_n_++;
                     uint8_t target_pos_in_children = target_internal->pos_in_childrens_;
+#if DEBUG_PRINT_DIDX
+                    alex::coutLock.lock();
+                    std::cout << "delta_index_ : " << this << '\n';
+                    std::cout << "splitting internal node" << '\n';
+                    std::cout << "target_pos_in_children : " << (int) target_pos_in_children <<'\n';
+                    std::cout << "parent key_n_ : " << (int) parent->key_n_ << '\n' << std::endl; 
+                    alex::coutLock.unlock();
+#endif    
                     
                     //1. shift childrens_ and keys_ by one
-                    //shift start pos is right next to the pos where target existed
-                    parent->shift_by_one(target_pos_in_children + 1);
+                    //for childrens, we shift right next to the target_pos
+                    //for keys, we shift 'from' target_pos
+                    parent->shift_by_one_childrens(target_pos_in_children + 1);
+                    parent->shift_by_one_keys(target_pos_in_children);
+                    parent->key_n_++;
                     
                     //2. there will be a new space in keys_. put middle key there.
-                    parent->keys_[target_pos_in_children + 1] = target_internal->keys_[left_half_cnt];
+                    parent->keys_[target_pos_in_children] = target_internal->keys_[left_half_cnt];
 
                     //3. update childrens_ with left_leaf and right_leaf
                     parent->childrens_[target_pos_in_children] = left_internal;
@@ -501,16 +551,32 @@ public:
                     parent->child_n_ += 1;
                 }
 
-                //fill data
+                //update
                 left_internal->key_n_ = left_half_cnt;
-                right_internal->key_n_ = left_half_cnt + 1;
+                right_internal->key_n_ = left_half_cnt;
+                left_internal->child_n_ = 8;
+                right_internal->child_n_ = 8;
+
+                //fill keys
                 for (int i = 0; i < left_half_cnt; i++, idx++) {
                     left_internal->keys_[i] = target_internal->keys_[idx];
-                    left_internal->childrens_[i] = target_internal->childrens_[idx];
                 }
-                for (int i = 0; i < left_half_cnt + 1; i++, idx++) {
+                idx++;
+                for (int i = 0; i < left_half_cnt; i++, idx++) {
                     right_internal->keys_[i] = target_internal->keys_[idx];
+                }
+
+                //fill childrens
+                idx = 0;
+                for (int i = 0; i <= left_half_cnt; i++, idx++) {
+                    left_internal->childrens_[i] = target_internal->childrens_[idx];
+                    left_internal->childrens_[i]->pos_in_childrens_ = i;
+                    left_internal->childrens_[i]->parent_ = left_internal;
+                }
+                for (int i = 0; i <= left_half_cnt; i++, idx++) {
                     right_internal->childrens_[i] = target_internal->childrens_[idx];
+                    right_internal->childrens_[i]->pos_in_childrens_ = i;
+                    right_internal->childrens_[i]->parent_ = right_internal;
                 }
 
                 delete target_internal;
@@ -520,6 +586,12 @@ public:
             if (parent->key_n_ < node_capacity) {break;}
             else {target_node = parent;}
         }
+#if DEBUG_PRINT_DIDX
+        alex::coutLock.lock();
+        std::cout << "delta_index_ : " << this << '\n';
+        std::cout << "split ends " << target_node <<'\n' << std::endl;
+        alex::coutLock.unlock();
+#endif
     }
 
 };

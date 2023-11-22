@@ -76,6 +76,7 @@ typedef unsigned __int32 uint32_t;
 
 /*** debug print ***/
 #define DEBUG_PRINT 0
+#define DEBUG_PRINT_DIDX 0
 
 /*** profile ***/
 #define PROFILE 0
@@ -110,7 +111,7 @@ class AlexKey {
   AlexKey() = default;
 
   AlexKey(T *key_arr) {
-    key_arr_ = new T[max_key_length_];
+    key_arr_ = new T[max_key_length_]();
     std::copy(key_arr, key_arr + max_key_length_, key_arr_);
   }
 
@@ -141,6 +142,23 @@ class AlexKey {
       else if (key_arr_[i] > other.key_arr_[i]) {return false;}
     }
     return false;
+  }
+
+  bool operator<= (const AlexKey<T>& other) const {
+    assert(key_arr_ != nullptr && other.key_arr_ != nullptr);
+    for (unsigned int i = 0; i < max_key_length_; i++) {
+      if (key_arr_[i] < other.key_arr_[i]) {return true;}
+      else if (key_arr_[i] > other.key_arr_[i]) {return false;}
+    }
+    return true;
+  }
+
+  bool operator== (const AlexKey<T>& other) const {
+    assert(key_arr_ != nullptr && other.key_arr_ != nullptr);
+    for (unsigned int i = 0; i < max_key_length_; i++) {
+      if (key_arr_[i] != other.key_arr_[i]) {return false;}
+    }
+    return true;
   }
 
 };
