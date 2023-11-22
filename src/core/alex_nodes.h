@@ -1705,6 +1705,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       node_status_ = INSERT_AT_DATA;
       memory_fence();
       pthread_mutex_unlock(&insert_mutex_);
+      memory_fence();
     }
     else {
       //need to move tmp_delta_idx_ to delta_idx_.
@@ -1726,6 +1727,7 @@ class AlexDataNode : public AlexNode<T, P, Alloc> {
       tmp_delta_idx_ = nullptr;
       memory_fence();
       pthread_mutex_unlock(&insert_mutex_);
+      memory_fence();
 
       if (child_just_splitted_) {//if it's sharing delta index
 #if DEBUG_PRINT
